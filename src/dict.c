@@ -46,6 +46,7 @@
 #include "dict.h"
 #include "zmalloc.h"
 #include "redisassert.h"
+#include "redis.h"
 
 /* Using dictEnableResize() / dictDisableResize() we make possible to
  * enable/disable resizing of the hash table as needed. This is very important
@@ -64,6 +65,32 @@ static int _dictExpandIfNeeded(dict *ht);
 static unsigned long _dictNextPower(unsigned long size);
 static int _dictKeyIndex(dict *ht, const void *key);
 static int _dictInit(dict *ht, dictType *type, void *privDataPtr);
+
+/*
+ * hash function for redis. Note!! This function should be the same with Twemproxy modified by Tencent IEG dba.
+ * */
+
+static uint64_t FNV_64_INIT = UINT64_C(0xcbf29ce484222325);
+static uint64_t FNV_64_PRIME = UINT64_C(0x100000001b3);
+static uint32_t FNV_32_INIT = 2166136261UL;
+static uint32_t FNV_32_PRIME = 16777619;
+
+
+uint32_t
+hash_fnv1a_64(const char *key, size_t key_length)
+{
+    uint32_t hash = (uint32_t) FNV_64_INIT;
+    size_t x;
+
+    for (x = 0; x < key_length; x++) {
+        uint32_t val = (uint32_t)key[x];
+        hash ^= val;
+        hash *= (uint32_t) FNV_64_PRIME;
+    }   
+
+    return hash;
+}
+
 
 /* -------------------------- hash functions -------------------------------- */
 
@@ -184,6 +211,7 @@ int _dictInit(dict *d, dictType *type,
     d->privdata = privDataPtr;
     d->rehashidx = -1;
     d->iterators = 0;
+    d->db_ptr = NULL;
     return DICT_OK;
 }
 
@@ -310,6 +338,27 @@ int dictAdd(dict *d, void *key, void *val)
     dictEntry *entry = dictAddRaw(d,key);
 
     if (!entry) return DICT_ERR;
+//    if( d->db_ptr != NULL){
+//        /* get the key hash for bucket */
+//        uint32_t key_hash_val = hash_fnv1a_64( (char *)key, strlen((char *)key));
+//        redisDb *tdb = (redisDb *)d->db_ptr;
+//
+//        key_hash_val %= REDIS_HASH_BUCKETS;
+//        assert(key_hash_val < REDIS_HASH_BUCKETS);
+//
+//        /* add the node to the bucket */
+//        entry->hk = tdb->hk[key_hash_val].next;
+//        entry->hk_pre = NULL;
+//        entry->o_flag = REDIS_KEY_NORMAL;
+//
+//        if( tdb->hk[key_hash_val].next != NULL ){ /* not the last node (last node is null) */
+//            tdb->hk[key_hash_val].next->hk_pre = entry;
+//        }
+//
+//        tdb->hk[key_hash_val].next = entry;
+//        tdb->hk[key_hash_val].keys++;
+//    }
+
     dictSetVal(d, entry, val);
     return DICT_OK;
 }
@@ -348,6 +397,27 @@ dictEntry *dictAddRaw(dict *d, void *key)
     entry->next = ht->table[index];
     ht->table[index] = entry;
     ht->used++;
+
+   if( d->db_ptr != NULL){
+       /* get the key hash for bucket */
+       uint32_t key_hash_val = hash_fnv1a_64( (char *)key, strlen((char *)key));
+       redisDb *tdb = (redisDb *)d->db_ptr;
+
+       key_hash_val %= REDIS_HASH_BUCKETS;
+       assert(key_hash_val < REDIS_HASH_BUCKETS);
+
+       /* add the node to the bucket */
+       entry->hk = tdb->hk[key_hash_val].next;
+       entry->hk_pre = NULL;
+       entry->o_flag = REDIS_KEY_NORMAL;
+
+       if( tdb->hk[key_hash_val].next != NULL ){ /* not the last node (last node is null) */
+           tdb->hk[key_hash_val].next->hk_pre = entry;
+       }
+
+       tdb->hk[key_hash_val].next = entry;
+       tdb->hk[key_hash_val].keys++;
+   }
 
     /* Set the hash entry fields. */
     dictSetKey(d, entry, key);
@@ -413,6 +483,29 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                     prevHe->next = he->next;
                 else
                     d->ht[table].table[idx] = he->next;
+
+                if( d->db_ptr != NULL){  /* delete from key list */
+                    redisDb *tdb = (redisDb *)d->db_ptr;
+                    uint32_t key_hash_val = hash_fnv1a_64( (char *)key, strlen((char *)key));
+
+                    key_hash_val %= REDIS_HASH_BUCKETS;
+                    assert(key_hash_val < REDIS_HASH_BUCKETS);
+
+                    /* delete the node from the bucket */
+                    tdb->hk[key_hash_val].keys--;
+
+
+                    if(he->hk_pre != NULL){
+                        he->hk_pre->hk = he->hk;
+                    }else{
+                        tdb->hk[key_hash_val].next = he->hk;
+                    }
+
+                    if(he->hk != NULL){
+                        he->hk->hk_pre = he->hk_pre;
+                    }
+                } 
+
                 if (!nofree) {
                     dictFreeKey(d, he);
                     dictFreeVal(d, he);
@@ -450,6 +543,27 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
+            if( d->db_ptr != NULL){  /* delete from key list */
+                    redisDb *tdb = (redisDb *)d->db_ptr;
+                    uint32_t key_hash_val = hash_fnv1a_64( (char *)he->key, strlen((char *)he->key));
+
+                    key_hash_val %= REDIS_HASH_BUCKETS;
+                    assert(key_hash_val < REDIS_HASH_BUCKETS);
+
+                    /* delete the node from the bucket */
+                    tdb->hk[key_hash_val].keys--;
+
+
+                    if(he->hk_pre != NULL){
+                        he->hk_pre->hk = he->hk;
+                    }else{
+                        tdb->hk[key_hash_val].next = he->hk;
+                    }
+
+                    if(he->hk != NULL){
+                        he->hk->hk_pre = he->hk_pre;
+                    }
+                }
             dictFreeKey(d, he);
             dictFreeVal(d, he);
             zfree(he);

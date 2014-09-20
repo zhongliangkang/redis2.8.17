@@ -115,6 +115,7 @@ struct redisServer server; /* server global state */
  *    its execution as long as the kernel scheduler is giving us time.
  *    Note that commands that may trigger a DEL as a side effect (like SET)
  *    are not fast commands.
+ * C: Redis Cluster management command, used only for is transfer program clients
  */
 struct redisCommand redisCommandTable[] = {
     {"get",getCommand,2,"rF",0,NULL,1,1,1,0,0},
@@ -273,7 +274,24 @@ struct redisCommand redisCommandTable[] = {
     {"pfcount",pfcountCommand,-2,"w",0,NULL,1,1,1,0,0},
     {"pfmerge",pfmergeCommand,-2,"wm",0,NULL,1,-1,1,0,0},
     {"pfdebug",pfdebugCommand,-3,"w",0,NULL,0,0,0,0,0},
-    {"latency",latencyCommand,-2,"arslt",0,NULL,0,0,0,0,0}
+    {"latency",latencyCommand,-2,"arslt",0,NULL,0,0,0,0,0},
+
+    /* redis cluster added commands */
+    {"hashkeys",hashkeysCommand,3,"rS",0,NULL,0,0,0,0,0},
+    {"gethashval",gethashvalCommand,2,"rS",0,NULL,0,0,0,0,0},
+    {"hashkeyssize",hashkeyssizeCommand,2,"rS",0,NULL,0,0,0,0,0},
+
+    /* Redis cluster manage command */
+    {"rctransserver",rctransserverCommand,1,"aw",0,NULL,0,0,0,0,0}, /* note: this command cannot contain C flag */
+    {"rclockkey",rclockkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
+    {"rcunlockkey",rcunlockkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
+    {"rctransendkey",rctransendkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
+    {"rctransbegin",rctransbeginCommand,3,"awC",0,NULL,0,0,0,0,0},
+    {"rctransend",rctransendCommand,3,"awmC",0,NULL,0,0,0,0,0},
+
+    {"rckeystatus",rckeystatusCommand,2,"awC",0,NULL,1,1,1,0,0},
+    {"rcbucketstatus",rcbucketstatusCommand,2,"awC",0,NULL,1,1,1,0,0},
+    {"rccastransend",rccastransendCommand,1,"awC",0,NULL,0,0,0,0,0}
 };
 
 /*============================ Utility functions ============================ */
@@ -1523,6 +1541,23 @@ void adjustOpenFilesLimit(void) {
     }
 }
 
+/* init a redisdb hash bucket */
+void initHashBucket(struct hashBucket * bkt){
+    int i;
+    struct hashBucket * tbkt = bkt;
+    for (i =0; i< REDIS_HASH_BUCKETS; i++){
+        redisAssert(tbkt);
+        tbkt->hash_id = i;
+        tbkt->status = 1;  /* init 1,means in using */
+        tbkt->keys = 0;
+        tbkt->next = NULL; /* init as NULL */
+
+        tbkt++;
+    }
+}
+
+
+
 /* Initialize a set of file descriptors to listen to the specified 'port'
  * binding the addresses specified in the Redis server configuration.
  *
@@ -1663,12 +1698,15 @@ void initServer(void) {
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
+        server.db[j].dict->db_ptr = (void *)(&server.db[j]);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&setDictType,NULL);
         server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
+        server.db[j].hk = zmalloc(sizeof(struct hashBucket) * REDIS_HASH_BUCKETS);;
         server.db[j].id = j;
         server.db[j].avg_ttl = 0;
+        initHashBucket(server.db[j].hk);
     }
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = listCreate();
@@ -1690,6 +1728,7 @@ void initServer(void) {
     server.stat_peak_memory = 0;
     server.resident_set_size = 0;
     server.lastbgsave_status = REDIS_OK;
+    server.svr_in_transfer = 0;
     server.aof_last_write_status = REDIS_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
@@ -1768,6 +1807,7 @@ void populateCommandTable(void) {
             case 't': c->flags |= REDIS_CMD_STALE; break;
             case 'M': c->flags |= REDIS_CMD_SKIP_MONITOR; break;
             case 'F': c->flags |= REDIS_CMD_FAST; break;
+            case 'C': c->flags |= REDIS_CMD_TRANSFER; break;
             default: redisPanic("Unsupported command flag"); break;
             }
             f++;
@@ -1884,6 +1924,69 @@ void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
     redisOpArrayAppend(&server.also_propagate,cmd,dbid,argv,argc,target);
 }
 
+/* check server transfer status */
+int check_server_in_transfer(){
+    if(server.svr_in_transfer){
+        return server.svr_in_transfer;
+    }
+
+    /* redis server run normally */
+    return 0;
+}
+
+/* check command key(s)'s bucket if locked, check keys if locked.
+return: 
+    0 : all keys status ok
+    1 : some key(s) are transfering 
+    2 : some key(s)'s bucket is transfered
+    3 : some key's bucket is transfered, some key is transfering.
+*/
+int check_command_keys(redisClient *c){
+    int firstkey, lastkey, keystep, idx ;
+    int keylock = 0, hash_transed= 0;
+    uint32_t val;
+    redisDb *rdb = c->db;
+    dictEntry * de;
+
+    firstkey = c->cmd->firstkey;
+    lastkey  = c->cmd->lastkey;
+    keystep  = c->cmd->keystep;
+
+    if( c->rc_flag == 1 ){
+        return 0;
+    }
+
+    if(firstkey == 0 ) {
+        return 0;         //command not using key
+    }
+
+    if( lastkey < 0 ){
+        lastkey = c->argc - 1;   // to the last param index
+    }
+
+    for(idx = firstkey; idx <= lastkey; idx += keystep){
+        val = get_key_hash((sds)c->argv[idx]->ptr, sdslen((sds)c->argv[idx]->ptr));
+        assert(val < REDIS_HASH_BUCKETS);
+
+        if(rdb->hk[val].status == REDIS_BUCKET_TRANSFERING){
+            de = dictFind(rdb->dict, c->argv[idx]->ptr);
+            if( de == NULL || de->o_flag != REDIS_KEY_NORMAL){
+                keylock = 1;
+            }
+
+        }else if(rdb->hk[val].status == REDIS_BUCKET_TRANSFERED){
+            hash_transed = 1;
+        }
+    }
+
+    if(keylock && hash_transed) return 3;
+    if(!keylock && hash_transed) return 2;
+    if(keylock && !hash_transed) return 1;
+
+    return 0;
+}
+
+
 /* It is possible to call the function forceCommandPropagation() inside a
  * Redis command implementaiton in order to to force the propagation of a
  * specific command execution into AOF / Replication. */
@@ -1905,6 +2008,25 @@ void call(redisClient *c, int flags) {
     {
         replicationFeedMonitors(c,server.monitors,c->db->id,c->argv,c->argc);
     }
+
+    if(check_server_in_transfer()){
+        /*  check key if in transfering here */
+        int tv =check_command_keys(c); 
+        if(tv == 0){
+            // check OK. to nothing
+        }else if( tv == 1){
+            //addReplyStatusFormat(c,"first: %d,last:%d,step:%d, key: %s, ret: %d",
+            //        c->cmd->firstkey,c->cmd->lastkey,c->cmd->keystep,(char *)c->argv[1]->ptr,tv);
+            addReplyError(c,"KEY_TRANSFERING");
+            return ;
+        }else if(tv == 2){
+            addReplyError(c,"BUCKET_TRANS_DONE");
+            return ;
+        }else{
+            addReplyError(c,"KEY_TRANSFERING");
+        }
+    }
+
 
     /* Call the command. */
     c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
@@ -2018,6 +2140,15 @@ int processCommand(redisClient *c) {
         addReply(c,shared.noautherr);
         return REDIS_OK;
     }
+
+    /* check if the user is authenticated for transfer */
+    if( c->rc_flag != 1 && c->cmd->flags & REDIS_CMD_TRANSFER){
+        flagTransaction(c);
+        addReplyErrorFormat(c,"manage command not permitted '%s'",
+            (char*)c->argv[0]->ptr);
+        return REDIS_OK;
+    }
+
 
     /* Handle the maxmemory directive.
      *

@@ -169,6 +169,14 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_CMD_SKIP_MONITOR 2048         /* "M" flag */
 #define REDIS_CMD_ASKING 4096               /* "k" flag */
 #define REDIS_CMD_FAST 8192                 /* "F" flag */
+/* new command flag for redis cluster only,we set it a high bit: 0x80000000   */
+#define REDIS_CMD_TRANSFER 2147483648       /* "C" flag */
+
+/* Hash buckets, fixed: 420000 */
+#define REDIS_HASH_BUCKETS 420000
+
+
+
 
 /* Object types */
 #define REDIS_STRING 0
@@ -242,6 +250,19 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
 #define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
+
+
+/* Redis bucket status */
+#define REDIS_BUCKET_IN_USING 0
+#define REDIS_BUCKET_TRANSFERING 1
+#define REDIS_BUCKET_TRANSFERED  2
+
+/* Redis key status */
+#define REDIS_KEY_NORMAL  0
+#define REDIS_KEY_TRANSFERING 1
+#define REDIS_KEY_TRANSFERED  2
+
+
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
@@ -397,7 +418,18 @@ typedef struct redisObject {
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
     int refcount;
     void *ptr;
+
+    /* for bucket pointer */
+    void *bkt_ptr;
 } robj;
+
+typedef struct hashBucket{
+    int    hash_id;
+    int    status;   /* 1: means in using, 2: means locking */
+    uint32_t  keys;     /* record key number */
+    dictEntry *next;    /* link bucket items */
+} hashbucket;
+
 
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
@@ -418,6 +450,9 @@ typedef struct redisDb {
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
     int id;
     long long avg_ttl;          /* Average TTL, just for stats */
+
+    /* hash buckets chains */
+    struct hashBucket *hk;  /* for each redis database, we split the data into 42w by hash */
 } redisDb;
 
 /* Client MULTI/EXEC state */
@@ -493,6 +528,7 @@ typedef struct redisClient {
     long long repl_ack_time;/* replication ack time, if this is a slave */
     char replrunid[REDIS_RUN_ID_SIZE+1]; /* master run id if this is a master */
     int slave_listening_port; /* As configured with: SLAVECONF listening-port */
+    int rc_flag;            /* flag for Redis Cluster, 1 means this client is transfer connection, others is 0 */
     multiState mstate;      /* MULTI/EXEC state */
     blockingState bpop;   /* blocking state */
     list *watched_keys;     /* Keys WATCHED for MULTI/EXEC CAS */
@@ -811,6 +847,8 @@ struct redisServer {
     int assert_line;
     int bug_report_start; /* True if bug report header was already logged. */
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
+
+    int svr_in_transfer;  /* Show if the resis is in transfering status,  0: nomal  1:tranfering  */
 };
 
 typedef struct pubsubPattern {
@@ -1142,6 +1180,10 @@ void closeListeningSockets(int unlink_unix_socket);
 void updateCachedTime(void);
 void resetServerStats(void);
 
+/* for Redis Cluster  */
+int check_server_in_transfer();
+int check_command_keys(redisClient *c);
+
 /* Set data type */
 robj *setTypeCreate(robj *value);
 int setTypeAdd(robj *subject, robj *value);
@@ -1399,6 +1441,35 @@ void pfcountCommand(redisClient *c);
 void pfmergeCommand(redisClient *c);
 void pfdebugCommand(redisClient *c);
 void latencyCommand(redisClient *c);
+void hashkeysCommand(redisClient *c);
+void gethashvalCommand(redisClient *c);
+void hashkeyssizeCommand(redisClient *c);
+
+/* set the current connection as transfer connection */
+void rctransserverCommand(redisClient *c);
+/* lock a key for transfer */
+void rclockkeyCommand(redisClient *c);
+/* unlock a key after transfer */
+void rcunlockkeyCommand(redisClient *c);
+/* set the key as transfered */
+void rctransendkeyCommand(redisClient *c);
+/* set the seg_start-seg_end in transfering status */
+void rctransbeginCommand(redisClient *c);
+/* set the seg_start-seg_end transfered */
+void rctransendCommand(redisClient *c);
+
+/* check key transfer status */
+void rckeystatusCommand(redisClient *c);
+/* check bucket transfer status */
+void rcbucketstatusCommand(redisClient *c);
+/* check and set redis server transfer status, if the server transfer finished, set as not transfering. */
+void rccastransendCommand(redisClient *c);
+
+
+/* compute the hash for key */
+uint32_t get_key_hash(sds key, size_t len);
+
+
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

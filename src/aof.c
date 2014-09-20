@@ -521,6 +521,7 @@ struct redisClient *createFakeClient(void) {
     c->flags = 0;
     /* We set the fake client as a slave waiting for the synchronization
      * so that Redis will not try to send replies to this client. */
+    c->rc_flag = 0;
     c->replstate = REDIS_REPL_WAIT_BGSAVE_START;
     c->reply = listCreate();
     c->reply_bytes = 0;

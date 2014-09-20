@@ -52,7 +52,13 @@ typedef struct dictEntry {
         int64_t s64;
         double d;
     } v;
+    uint8_t o_flag;      /* flag to identify the dt status: 0->normal key,  1-> key transfering */
     struct dictEntry *next;
+
+    /* point to next hash bucket item */
+    struct dictEntry * hk;
+    struct dictEntry * hk_pre;  /* pre item */
+
 } dictEntry;
 
 typedef struct dictType {
@@ -79,6 +85,8 @@ typedef struct dict {
     dictht ht[2];
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
     int iterators; /* number of iterators currently running */
+
+    void *db_ptr;  /* for bucket, point to db */
 } dict;
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call
@@ -180,5 +188,9 @@ unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, void *pri
 extern dictType dictTypeHeapStringCopyKey;
 extern dictType dictTypeHeapStrings;
 extern dictType dictTypeHeapStringCopyKeyValue;
+
+/* for hash bucket */
+uint32_t hash_fnv1a_64(const char *key, size_t key_length);
+
 
 #endif /* __DICT_H */
