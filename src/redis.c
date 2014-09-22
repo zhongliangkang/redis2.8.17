@@ -1548,9 +1548,11 @@ void initHashBucket(struct hashBucket * bkt){
     for (i =0; i< REDIS_HASH_BUCKETS; i++){
         redisAssert(tbkt);
         tbkt->hash_id = i;
-        tbkt->status = 1;  /* init 1,means in using */
+        tbkt->status = REDIS_BUCKET_IN_USING;  /* init REDIS_BUCKET_IN_USING ,means in using */
         tbkt->keys = 0;
-        tbkt->next = NULL; /* init as NULL */
+        tbkt->list_head = NULL; /* init as NULL */
+        tbkt->ptr_lock_key = NULL;
+        tbkt->locking_nexists_key = NULL;
 
         tbkt++;
     }
@@ -1971,6 +1973,10 @@ int check_command_keys(redisClient *c){
         if(rdb->hk[val].status == REDIS_BUCKET_TRANSFERING){
             de = dictFind(rdb->dict, c->argv[idx]->ptr);
             if( de == NULL || de->o_flag != REDIS_KEY_NORMAL){
+                keylock = 1;
+            }else if(rdb->hk[val].locking_nexists_key != NULL && 
+                    sdscmp(rdb->hk[val].locking_nexists_key, c->argv[idx]->ptr) == 0){
+                // key not exist,but key is locked!
                 keylock = 1;
             }
 

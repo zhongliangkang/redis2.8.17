@@ -418,16 +418,15 @@ typedef struct redisObject {
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
     int refcount;
     void *ptr;
-
-    /* for bucket pointer */
-    void *bkt_ptr;
 } robj;
 
 typedef struct hashBucket{
     int    hash_id;
     int    status;   /* 1: means in using, 2: means locking */
     uint32_t  keys;     /* record key number */
-    dictEntry *next;    /* link bucket items */
+    dictEntry * list_head;    /* link bucket items */
+    dictEntry * ptr_lock_key; /* point to key locked */
+    void *    locking_nexists_key;    /* store the key string when key doesnot exists */
 } hashbucket;
 
 

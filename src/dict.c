@@ -407,15 +407,15 @@ dictEntry *dictAddRaw(dict *d, void *key)
        assert(key_hash_val < REDIS_HASH_BUCKETS);
 
        /* add the node to the bucket */
-       entry->hk = tdb->hk[key_hash_val].next;
+       entry->hk = tdb->hk[key_hash_val].list_head;
        entry->hk_pre = NULL;
        entry->o_flag = REDIS_KEY_NORMAL;
 
-       if( tdb->hk[key_hash_val].next != NULL ){ /* not the last node (last node is null) */
-           tdb->hk[key_hash_val].next->hk_pre = entry;
+       if( tdb->hk[key_hash_val].list_head != NULL ){ /* not the last node (last node is null) */
+           tdb->hk[key_hash_val].list_head->hk_pre = entry;
        }
 
-       tdb->hk[key_hash_val].next = entry;
+       tdb->hk[key_hash_val].list_head = entry;
        tdb->hk[key_hash_val].keys++;
    }
 
@@ -498,7 +498,7 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                     if(he->hk_pre != NULL){
                         he->hk_pre->hk = he->hk;
                     }else{
-                        tdb->hk[key_hash_val].next = he->hk;
+                        tdb->hk[key_hash_val].list_head = he->hk;
                     }
 
                     if(he->hk != NULL){
@@ -557,7 +557,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
                     if(he->hk_pre != NULL){
                         he->hk_pre->hk = he->hk;
                     }else{
-                        tdb->hk[key_hash_val].next = he->hk;
+                        tdb->hk[key_hash_val].list_head= he->hk;
                     }
 
                     if(he->hk != NULL){

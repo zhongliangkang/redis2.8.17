@@ -19,7 +19,7 @@ proc test_memory_efficiency {range} {
 start_server {tags {"memefficiency"}} {
     foreach {size_range expected_min_efficiency} {
         32    0.15
-        64    0.25
+        64    0.23
         128   0.35
         1024  0.75
         16384 0.82

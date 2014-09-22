@@ -370,7 +370,7 @@ void hashkeysCommand(redisClient *c){
         void *replylen = addDeferredMultiBulkLength(c);
         //di = dictGetSafeIterator(c->db->dict);
         allkeys = (pattern[0] == '*' && pattern[1] == '\0');
-        de_head = c->db->hk[val].next;
+        de_head = c->db->hk[val].list_head;
         while((de = de_head) != NULL) {
             de_head = de_head->hk;
             sds key = dictGetKey(de);
@@ -422,30 +422,79 @@ void rctransserverCommand(redisClient *c){
 
 void rclockkeyCommand(redisClient *c){
     dictEntry * o;
+    sds   tp;
+
+    redisDb   * rdb = c->db;
+    uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+    redisAssert( & rdb->hk[hashid]);
+    if( rdb->hk[hashid].status == REDIS_BUCKET_IN_USING){
+        // if bucket in using normally, cannot lock key!
+        addReplyStatus(c,"bucket not in transfering status");
+        return;
+    }
+
+    // check if another key is locked.
+    if( rdb->hk[hashid].ptr_lock_key != NULL){
+        addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key: %s",
+                (char *)rdb->hk[hashid].ptr_lock_key->key);
+        return;
+    }
+    // check if a not exists key is locked.
+    if( rdb->hk[hashid].locking_nexists_key != NULL){
+        addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key(not_exists): %s",
+                (char *)rdb->hk[hashid].locking_nexists_key);
+        return;
+    }
+
+
     o = dictFind(c->db->dict,c->argv[1]->ptr);
     if(o){
         if( o->o_flag == REDIS_KEY_NORMAL ){
             o->o_flag = REDIS_KEY_TRANSFERING;
+
+            /* bucket pointer record locked key info */
+            rdb->hk[hashid].ptr_lock_key = o;
             addReplyLongLong(c,o->o_flag);
         }else if(o->o_flag == REDIS_KEY_TRANSFERING){
+            /* locked */
             addReplyStatus(c,"locked");
         }else{
-            /* should never come to here ,unless new feature imported */
-            addReplyError(c,"should never get this error!");
+            /* just return the key o_flag */
+            addReplyLongLong(c,o->o_flag);
         }
     }else{
-        addReplyError(c,"key not exist! need to put this key to hash bucket");
+        // the key doesnot exist, save it to bucket
+        redisAssert(rdb->hk[hashid].locking_nexists_key == NULL);
+        tp = zmalloc(sizeof(char) *sdslen((sds)c->argv[1]->ptr) + 1);
+        rdb->hk[hashid].locking_nexists_key = sdscpylen(tp, (sds)c->argv[1]->ptr,sdslen((sds)c->argv[1]->ptr));
+        addReplyStatusFormat(c,"lock key(not_exists): %s",tp);
+        return;
     }
 }
 
 void rcunlockkeyCommand(redisClient *c){
     dictEntry * o;
+    sds tp;
+    redisDb   * rdb = c->db;
+    uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+    redisAssert( & rdb->hk[hashid]);
+    tp = rdb->hk[hashid].locking_nexists_key;
+
     o = dictFind(c->db->dict,c->argv[1]->ptr);
     if(o){
+
+        /* we only unlock keys in transfering, transfered key cannot unlock */
         if(o->o_flag == REDIS_KEY_TRANSFERING){
+            redisAssert( &rdb->hk[hashid] && rdb->hk[hashid].ptr_lock_key != NULL);
+
             o->o_flag = REDIS_KEY_NORMAL;
+            rdb->hk[hashid].ptr_lock_key = NULL;
         }
         addReplyLongLong(c,o->o_flag);
+    }else if(tp != NULL && sdscmp(tp,c->argv[1]->ptr) == 0){
+        zfree(tp);
+        rdb->hk[hashid].locking_nexists_key = NULL;
+        addReplyLongLong(c,0);
     }else{
         addReplyError(c,"key not exist! need to put this key to hash bucket");
     }
@@ -453,12 +502,27 @@ void rcunlockkeyCommand(redisClient *c){
 
 void rctransendkeyCommand(redisClient *c){
     dictEntry * o;
+    sds tp;
+    redisDb   * rdb = c->db;
+    uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+    redisAssert( & rdb->hk[hashid]);
+    tp = rdb->hk[hashid].locking_nexists_key;
+
     o = dictFind(c->db->dict,c->argv[1]->ptr);
     if(o){
         if(o->o_flag == REDIS_KEY_TRANSFERING){
+            redisDb   * rdb = c->db;
+            uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+            redisAssert( &rdb->hk[hashid] && rdb->hk[hashid].ptr_lock_key != NULL);
+
             o->o_flag = REDIS_KEY_TRANSFERED;
+            rdb->hk[hashid].ptr_lock_key = NULL;
         }
         addReplyLongLong(c,o->o_flag);
+    }else if(tp != NULL && sdscmp(tp,c->argv[1]->ptr) == 0){
+        zfree(tp);
+        rdb->hk[hashid].locking_nexists_key = NULL;
+        addReplyLongLong(c,0);
     }else{
         addReplyError(c,"key not exist! need to put this key to hash bucket");
     }
@@ -510,6 +574,8 @@ void rctransbeginCommand(redisClient *c){
 
     }
 }
+
+/* TODO: if here need to check each hashid key status? need! */
 void rctransendCommand(redisClient *c){
     redisDb *rdb = c->db;
     long start= REDIS_HASH_BUCKETS+1, end = REDIS_HASH_BUCKETS+1; 
