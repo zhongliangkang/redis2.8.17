@@ -389,7 +389,7 @@ void hashkeysCommand(redisClient *c){
     }
 }
 
-uint32_t get_key_hash(sds key, size_t len){
+uint32_t get_key_hash(char * key, size_t len){
 
     uint32_t val = hash_fnv1a_64( key, len);
     val %= REDIS_HASH_BUCKETS;
@@ -416,8 +416,17 @@ void hashkeyssizeCommand(redisClient *c){
 }
 
 void rctransserverCommand(redisClient *c){
-    c->rc_flag = 1;
-    addReply(c,shared.ok);
+    if(strcmp(c->argv[1]->ptr,"in") == 0){
+        c->rc_flag = REDIS_CLIENT_TRANS_IN;
+        addReply(c,shared.ok);
+    }else if(strcmp(c->argv[1]->ptr,"out") == 0){
+        c->rc_flag = REDIS_CLIENT_TRANS_OUT;
+        addReply(c,shared.ok);
+    }else{
+        addReplyStatusFormat(c,"unkown parameter: %s",(char *)c->argv[1]->ptr);
+    }
+
+    return;
 }
 
 void rclockkeyCommand(redisClient *c){
@@ -425,7 +434,7 @@ void rclockkeyCommand(redisClient *c){
     sds   tp;
 
     redisDb   * rdb = c->db;
-    uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+    uint32_t hashid = get_key_hash((char*) c->argv[1]->ptr, strlen((char *)c->argv[1]->ptr));
     redisAssert( & rdb->hk[hashid]);
     if( rdb->hk[hashid].status == REDIS_BUCKET_IN_USING){
         // if bucket in using normally, cannot lock key!
@@ -441,7 +450,7 @@ void rclockkeyCommand(redisClient *c){
     }
     // check if a not exists key is locked.
     if( rdb->hk[hashid].locking_nexists_key != NULL){
-        addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key(not_exists): %s",
+        addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key(not_exists): %s.",
                 (char *)rdb->hk[hashid].locking_nexists_key);
         return;
     }
@@ -466,7 +475,8 @@ void rclockkeyCommand(redisClient *c){
         // the key doesnot exist, save it to bucket
         redisAssert(rdb->hk[hashid].locking_nexists_key == NULL);
         tp = zmalloc(sizeof(char) *sdslen((sds)c->argv[1]->ptr) + 1);
-        rdb->hk[hashid].locking_nexists_key = sdscpylen(tp, (sds)c->argv[1]->ptr,sdslen((sds)c->argv[1]->ptr));
+        rdb->hk[hashid].locking_nexists_key = memcpy(tp, (char *)c->argv[1]->ptr,strlen((char *)c->argv[1]->ptr));
+        tp[strlen((char *)c->argv[1]->ptr)]=0;
         addReplyStatusFormat(c,"lock key(not_exists): %s",tp);
         return;
     }
@@ -474,9 +484,9 @@ void rclockkeyCommand(redisClient *c){
 
 void rcunlockkeyCommand(redisClient *c){
     dictEntry * o;
-    sds tp;
+    char * tp;
     redisDb   * rdb = c->db;
-    uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+    uint32_t hashid = get_key_hash((char *) c->argv[1]->ptr, strlen((char*)c->argv[1]->ptr));
     redisAssert( & rdb->hk[hashid]);
     tp = rdb->hk[hashid].locking_nexists_key;
 
@@ -490,40 +500,50 @@ void rcunlockkeyCommand(redisClient *c){
             o->o_flag = REDIS_KEY_NORMAL;
             rdb->hk[hashid].ptr_lock_key = NULL;
         }
-        addReplyLongLong(c,o->o_flag);
-    }else if(tp != NULL && sdscmp(tp,c->argv[1]->ptr) == 0){
+
+    }
+
+    if(tp != NULL && strcmp(tp,(char *)c->argv[1]->ptr) == 0){
         zfree(tp);
         rdb->hk[hashid].locking_nexists_key = NULL;
-        addReplyLongLong(c,0);
-    }else{
+        addReplyLongLong(c,REDIS_KEY_NORMAL);
+        return;
+    }
+
+    if(o){
+        addReplyLongLong(c,o->o_flag);
+    } else{
         addReplyError(c,"key not exist! need to put this key to hash bucket");
     }
 }
 
 void rctransendkeyCommand(redisClient *c){
     dictEntry * o;
-    sds tp;
+    char * tp;
     redisDb   * rdb = c->db;
-    uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
+    uint32_t hashid = get_key_hash((char*) c->argv[1]->ptr, strlen((char*)c->argv[1]->ptr));
     redisAssert( & rdb->hk[hashid]);
     tp = rdb->hk[hashid].locking_nexists_key;
 
     o = dictFind(c->db->dict,c->argv[1]->ptr);
     if(o){
         if(o->o_flag == REDIS_KEY_TRANSFERING){
-            redisDb   * rdb = c->db;
-            uint32_t hashid = get_key_hash((sds) c->argv[1]->ptr, sdslen((sds)c->argv[1]->ptr));
             redisAssert( &rdb->hk[hashid] && rdb->hk[hashid].ptr_lock_key != NULL);
 
             o->o_flag = REDIS_KEY_TRANSFERED;
             rdb->hk[hashid].ptr_lock_key = NULL;
         }
-        addReplyLongLong(c,o->o_flag);
-    }else if(tp != NULL && sdscmp(tp,c->argv[1]->ptr) == 0){
+
+    }
+    if(tp != NULL && strcmp(tp,(char*)c->argv[1]->ptr) == 0){
         zfree(tp);
         rdb->hk[hashid].locking_nexists_key = NULL;
-        addReplyLongLong(c,0);
-    }else{
+        addReplyLongLong(c,REDIS_KEY_TRANSFERED);
+        return ;
+    }
+    if(o){
+        addReplyLongLong(c,o->o_flag);
+    } else{
         addReplyError(c,"key not exist! need to put this key to hash bucket");
     }
 }
@@ -578,9 +598,13 @@ void rctransbeginCommand(redisClient *c){
 /* TODO: if here need to check each hashid key status? need! */
 void rctransendCommand(redisClient *c){
     redisDb *rdb = c->db;
+    dictEntry * de;
     long start= REDIS_HASH_BUCKETS+1, end = REDIS_HASH_BUCKETS+1; 
     sds  str_start,str_end;
     long idx = 0;
+    int not_in_transfering_flag = 0;  // check if some bucket not in transfering status
+    int keys_not_transfered = 0;      // check if some key  not transfered, for trans_out bucket
+    int keys_not_normal = 0;          // check if some key  not normal, for trans_in bucket
 
     str_start = c->argv[1]->ptr;
     str_end   = c->argv[2]->ptr;
@@ -591,11 +615,11 @@ void rctransendCommand(redisClient *c){
             end   >= REDIS_HASH_BUCKETS || end   < 0 ||
             start > end){
         addReplyError(c,"Invalid hash segments");
-    }else{
-        // parameter ok
-        //addReplyStatusFormat(c,"start: %ld, end: %ld",start,end);
-        int not_in_transfering_flag = 0;
+        return;
+    }
 
+    // for trans out bucket
+    if(c->rc_flag == REDIS_CLIENT_TRANS_OUT){
         // check bucket status
         for( idx = start; idx <= end; idx++){
             if( rdb->hk[idx].status != REDIS_BUCKET_TRANSFERING && 
@@ -604,22 +628,85 @@ void rctransendCommand(redisClient *c){
                 not_in_transfering_flag = 1;
                 break;
             }
-        }
 
-        if( not_in_transfering_flag){
-            addReplyErrorFormat(c,"seg: %ld is not in transfering.",idx);
-        }else{
-            // change status to transfered
-            for(idx = start; idx <= end; idx++){
-                // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
-                if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
-                    rdb->hk[idx].status = REDIS_BUCKET_TRANSFERED;
+            de = rdb->hk[idx].list_head;
+            while(de){
+                if( de->o_flag != REDIS_KEY_TRANSFERED){
+                    keys_not_transfered++;
+                    break;
                 }
+
+                de = de->hk;
             }
-            addReply(c,shared.ok);
+
+            if(keys_not_transfered > 0){
+                break;
+            }
         }
 
+        if( not_in_transfering_flag > 0){
+            addReplyErrorFormat(c,"seg: %ld is not in transfering.",idx);
+            return;
+        }else if(keys_not_transfered > 0 ){
+            addReplyErrorFormat(c,"seg: %ld trans out not finished, key: %s",idx, (char *)de->key);
+            return;
+        }
+
+        // change status to transfered
+        for(idx = start; idx <= end; idx++){
+            // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
+            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
+                rdb->hk[idx].status = REDIS_BUCKET_TRANSFERED;
+            }
+        }
+        addReply(c,shared.ok);
+        return;
     }
+    
+    // for trans in server
+    if(c->rc_flag == REDIS_CLIENT_TRANS_IN){
+        // check bucket status
+        for( idx = start; idx <= end; idx++){
+            if( rdb->hk[idx].status != REDIS_BUCKET_TRANSFERING ){
+                // bucket status not in transfering
+                not_in_transfering_flag = 1;
+                break;
+            }
+
+            de = rdb->hk[idx].list_head;
+            while(de){
+                if(  de->o_flag != REDIS_KEY_NORMAL){
+                    keys_not_normal++;
+                    break;
+                }
+
+                de = de->hk;
+            }
+
+            if( keys_not_normal >  0){
+                break;
+            }
+        }
+
+        if( not_in_transfering_flag > 0){
+            addReplyErrorFormat(c,"seg: %ld is not in transfering.",idx);
+            return;
+        }else if(keys_not_normal > 0 ){
+            addReplyErrorFormat(c,"seg: %ld transf in not finished, key: %s",idx, (char *)de->key);
+            return;
+        }
+
+        // change status to transfered
+        for(idx = start; idx <= end; idx++){
+            // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
+            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
+                rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
+            }
+        }
+        addReply(c,shared.ok);
+        return;
+    }
+
 }
 
 void rckeystatusCommand(redisClient *c){

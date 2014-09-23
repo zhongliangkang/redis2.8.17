@@ -175,8 +175,10 @@ typedef long long mstime_t; /* millisecond time type. */
 /* Hash buckets, fixed: 420000 */
 #define REDIS_HASH_BUCKETS 420000
 
-
-
+/* Define redis client transfer status */
+#define REDIS_CLIENT_TRANS_NORMAL  0
+#define REDIS_CLIENT_TRANS_OUT 1   /* trans out */
+#define REDIS_CLIENT_TRANS_IN  2   /* trans in  */
 
 /* Object types */
 #define REDIS_STRING 0

@@ -282,7 +282,7 @@ struct redisCommand redisCommandTable[] = {
     {"hashkeyssize",hashkeyssizeCommand,2,"rS",0,NULL,0,0,0,0,0},
 
     /* Redis cluster manage command */
-    {"rctransserver",rctransserverCommand,1,"aw",0,NULL,0,0,0,0,0}, /* note: this command cannot contain C flag */
+    {"rctransserver",rctransserverCommand,2,"aw",0,NULL,0,0,0,0,0}, /* note: this command cannot contain C flag */
     {"rclockkey",rclockkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
     {"rcunlockkey",rcunlockkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
     {"rctransendkey",rctransendkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
@@ -1954,7 +1954,8 @@ int check_command_keys(redisClient *c){
     lastkey  = c->cmd->lastkey;
     keystep  = c->cmd->keystep;
 
-    if( c->rc_flag == 1 ){
+    /* maybe this client is trans_in or trans_out,skip check */
+    if( c->rc_flag !=  REDIS_CLIENT_TRANS_NORMAL ){
         return 0;
     }
 
@@ -2148,7 +2149,7 @@ int processCommand(redisClient *c) {
     }
 
     /* check if the user is authenticated for transfer */
-    if( c->rc_flag != 1 && c->cmd->flags & REDIS_CMD_TRANSFER){
+    if( c->rc_flag == REDIS_CLIENT_TRANS_NORMAL && c->cmd->flags & REDIS_CMD_TRANSFER){
         flagTransaction(c);
         addReplyErrorFormat(c,"manage command not permitted '%s'",
             (char*)c->argv[0]->ptr);
