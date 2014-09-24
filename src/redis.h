@@ -256,8 +256,9 @@ typedef long long mstime_t; /* millisecond time type. */
 
 /* Redis bucket status */
 #define REDIS_BUCKET_IN_USING 0
-#define REDIS_BUCKET_TRANSFERING 1
-#define REDIS_BUCKET_TRANSFERED  2
+#define REDIS_BUCKET_TRANSFER_IN  1
+#define REDIS_BUCKET_TRANSFER_OUT 2
+#define REDIS_BUCKET_TRANSFERED  3
 
 /* Redis key status */
 #define REDIS_KEY_NORMAL  0

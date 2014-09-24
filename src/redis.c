@@ -1971,12 +1971,35 @@ int check_command_keys(redisClient *c){
         val = get_key_hash((sds)c->argv[idx]->ptr, sdslen((sds)c->argv[idx]->ptr));
         assert(val < REDIS_HASH_BUCKETS);
 
-        if(rdb->hk[val].status == REDIS_BUCKET_TRANSFERING){
+        if(rdb->hk[val].status == REDIS_BUCKET_TRANSFER_OUT ){
+            /*
+               transfer out: 
+               1. if the key not exists
+               2. key not in normal status
+               3. key not exist, but locking
+            */
             de = dictFind(rdb->dict, c->argv[idx]->ptr);
-            if( de == NULL || de->o_flag != REDIS_KEY_NORMAL){
+            if( de == NULL || de->o_flag != REDIS_KEY_NORMAL ){
                 keylock = 1;
-            }else if(rdb->hk[val].locking_nexists_key != NULL && 
-                    sdscmp(rdb->hk[val].locking_nexists_key, c->argv[idx]->ptr) == 0){
+            }
+            if(rdb->hk[val].locking_nexists_key != NULL && 
+                    strcmp((char *)rdb->hk[val].locking_nexists_key, (char *)c->argv[idx]->ptr) == 0){
+                // key not exist,but key is locked!
+                keylock = 1;
+            }
+
+        }else if(rdb->hk[val].status == REDIS_BUCKET_TRANSFER_IN){
+            /*
+               transfer in: 
+               1. if the key exists and key not in normal status
+               2. key not exist, but locking
+            */
+            de = dictFind(rdb->dict, c->argv[idx]->ptr);
+            if( de != NULL && de->o_flag != REDIS_KEY_NORMAL ){
+                keylock = 1;
+            }
+            if(rdb->hk[val].locking_nexists_key != NULL && 
+                    strcmp((char *)rdb->hk[val].locking_nexists_key,(char *) c->argv[idx]->ptr) == 0){
                 // key not exist,but key is locked!
                 keylock = 1;
             }

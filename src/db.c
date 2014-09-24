@@ -564,35 +564,41 @@ void rctransbeginCommand(redisClient *c){
             end   >= REDIS_HASH_BUCKETS || end   < 0 ||
             start > end){
         addReplyError(c,"Invalid hash segments");
-    }else{
-        // parameter ok
-        //addReplyStatusFormat(c,"start: %ld, end: %ld",start,end);
-        int in_using_flag = 0;
-
-        // check bucket status
-        for( idx = start; idx <= end; idx++){
-            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
-                // bucket status in transfering
-                in_using_flag = 1;
-                break;
-            }
-        }
-
-        if( in_using_flag ){
-            addReplyErrorFormat(c,"seg: %ld is transfering.",idx);
-        }else{
-            for(idx = start; idx <= end; idx++){
-                // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
-                if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING ){
-                    rdb->hk[idx].status = REDIS_BUCKET_TRANSFERING;
-                }
-            }
-
-            server.svr_in_transfer = 1;  // set redis server to  transfering status
-            addReply(c,shared.ok);
-        }
-
+        return;
     }
+    // parameter ok
+    //addReplyStatusFormat(c,"start: %ld, end: %ld",start,end);
+    int in_using_flag = 0;
+
+    // check bucket status
+    for( idx = start; idx <= end; idx++){
+        if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN || 
+                rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT){
+            // bucket status in transfering
+            in_using_flag = 1;
+            break;
+        }
+    }
+
+    if( in_using_flag ){
+        addReplyErrorFormat(c,"seg: %ld is transfering.",idx);
+        return;
+    }
+    for(idx = start; idx <= end; idx++){
+        // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
+        if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING ){
+            if(c->rc_flag == REDIS_CLIENT_TRANS_OUT){
+                rdb->hk[idx].status = REDIS_BUCKET_TRANSFER_OUT;
+            }else if(c->rc_flag == REDIS_CLIENT_TRANS_IN){
+                rdb->hk[idx].status = REDIS_BUCKET_TRANSFER_IN;
+            }
+        }
+    }
+
+    server.svr_in_transfer = 1;  // set redis server to  transfering status
+    addReply(c,shared.ok);
+
+    return;
 }
 
 /* TODO: if here need to check each hashid key status? need! */
@@ -622,8 +628,7 @@ void rctransendCommand(redisClient *c){
     if(c->rc_flag == REDIS_CLIENT_TRANS_OUT){
         // check bucket status
         for( idx = start; idx <= end; idx++){
-            if( rdb->hk[idx].status != REDIS_BUCKET_TRANSFERING && 
-                    rdb->hk[idx].status !=  REDIS_BUCKET_TRANSFERED){
+            if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING){
                 // bucket status not in transfering
                 not_in_transfering_flag = 1;
                 break;
@@ -654,8 +659,8 @@ void rctransendCommand(redisClient *c){
 
         // change status to transfered
         for(idx = start; idx <= end; idx++){
-            // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
-            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
+            // NOTE: only set bucket TRANSFER_OUT to TRANSFERED, other status do not transfer!!
+            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT){
                 rdb->hk[idx].status = REDIS_BUCKET_TRANSFERED;
             }
         }
@@ -667,7 +672,7 @@ void rctransendCommand(redisClient *c){
     if(c->rc_flag == REDIS_CLIENT_TRANS_IN){
         // check bucket status
         for( idx = start; idx <= end; idx++){
-            if( rdb->hk[idx].status != REDIS_BUCKET_TRANSFERING ){
+            if( rdb->hk[idx].status ==  REDIS_BUCKET_IN_USING){
                 // bucket status not in transfering
                 not_in_transfering_flag = 1;
                 break;
@@ -699,7 +704,7 @@ void rctransendCommand(redisClient *c){
         // change status to transfered
         for(idx = start; idx <= end; idx++){
             // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
-            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
+            if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN){
                 rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
             }
         }
@@ -716,7 +721,7 @@ void rckeystatusCommand(redisClient *c){
         addReplyLongLong(c,o->o_flag);
         return;
     }
-    addReply(c, shared.crlf);
+    addReply(c,shared.nullbulk);
 }
 
 void rcbucketstatusCommand(redisClient *c){
@@ -743,7 +748,8 @@ void rccastransendCommand(redisClient *c){
     for(idx = 0; idx < REDIS_HASH_BUCKETS; idx++){
         if(rdb->hk[idx].status == REDIS_BUCKET_IN_USING ){
             using ++;
-        }else if(rdb->hk[idx].status == REDIS_BUCKET_TRANSFERING){
+        }else if(rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN 
+                || rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT){
             transfering ++;
         }else{
             transfered ++;
