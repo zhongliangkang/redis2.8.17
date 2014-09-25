@@ -517,6 +517,7 @@ void rcunlockkeyCommand(redisClient *c){
     }
 }
 
+/* delete the key after transend. */
 void rctransendkeyCommand(redisClient *c){
     dictEntry * o;
     char * tp;
@@ -525,6 +526,12 @@ void rctransendkeyCommand(redisClient *c){
     redisAssert( & rdb->hk[hashid]);
     tp = rdb->hk[hashid].locking_nexists_key;
 
+    /* only transfer out client can run this command. */
+    if(c->rc_flag != REDIS_CLIENT_TRANS_OUT){
+        addReplyError(c,"Only transfer_out client can run RCTRANSENDKEY command");
+        return;
+    }
+
     o = dictFind(c->db->dict,c->argv[1]->ptr);
     if(o){
         if(o->o_flag == REDIS_KEY_TRANSFERING){
@@ -532,6 +539,18 @@ void rctransendkeyCommand(redisClient *c){
 
             o->o_flag = REDIS_KEY_TRANSFERED;
             rdb->hk[hashid].ptr_lock_key = NULL;
+
+            // log aof/replication
+            rctransendkeyDel(c->db, c->argv[1]);
+
+            // delete the key
+            dbDelete(c->db,c->argv[1]);
+            signalModifiedKey(c->db,c->argv[1]);
+            notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
+                "del",c->argv[1],c->db->id);
+
+            addReplyLongLong(c,REDIS_KEY_TRANSFERED);
+            return;
         }
 
     }
@@ -543,6 +562,7 @@ void rctransendkeyCommand(redisClient *c){
     }
     if(o){
         addReplyLongLong(c,o->o_flag);
+        return;
     } else{
         addReplyError(c,"key not exist! need to put this key to hash bucket");
     }
@@ -1475,3 +1495,20 @@ int *zunionInterGetKeys(struct redisCommand *cmd,robj **argv, int argc, int *num
     *numkeys = num;
     return keys;
 }
+
+void rctransendkeyDel(redisDb *db, robj *key) {
+    robj *argv[2];
+
+    argv[0] = shared.del;
+    argv[1] = key;
+    incrRefCount(argv[0]);
+    incrRefCount(argv[1]);
+
+    if (server.aof_state != REDIS_AOF_OFF)
+        feedAppendOnlyFile(server.delCommand,db->id,argv,2);
+    replicationFeedSlaves(server.slaves,db->id,argv,2);
+
+    decrRefCount(argv[0]);
+    decrRefCount(argv[1]);
+}
+
