@@ -724,6 +724,31 @@ void rckeystatusCommand(redisClient *c){
     addReply(c,shared.nullbulk);
 }
 
+void rclockingkeysCommand(redisClient *c){
+    void *replylen = addDeferredMultiBulkLength(c);
+    long idx=0, keys=0;
+
+    for( idx =0; idx < REDIS_HASH_BUCKETS; idx++){
+        if(c->db->hk[idx].ptr_lock_key != NULL){
+            dictEntry *de = c->db->hk[idx].ptr_lock_key;
+            robj *   keyobj = createStringObject((char *)de->key,
+                    strlen((char *)de->key));
+            addReplyBulk(c,keyobj);
+            decrRefCount(keyobj);
+            keys++;
+        }else if(c->db->hk[idx].locking_nexists_key != NULL){
+            robj *   keyobj = createStringObject((char *)c->db->hk[idx].locking_nexists_key,
+                    strlen((char *)c->db->hk[idx].locking_nexists_key));
+            addReplyBulk(c,keyobj);
+            decrRefCount(keyobj);
+            keys++;
+        }
+    }
+
+    setDeferredMultiBulkLength(c, replylen, keys);
+    return;
+}
+
 void rcbucketstatusCommand(redisClient *c){
     redisDb *rdb = c->db;
     long int val = 0; // = (uint32_t)strtoul(c->argv[1]->ptr,NULL,10);
@@ -834,8 +859,8 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
     list *keys = listCreate();
     listNode *node, *nextnode;
     long count = 10;
-    sds pat;
-    int patlen, use_pattern = 0;
+    sds pat = NULL;
+    int patlen= 0, use_pattern = 0;
     dict *ht;
 
     /* Object must be NULL (to iterate keys names), or the type of the object

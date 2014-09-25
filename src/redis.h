@@ -1467,6 +1467,8 @@ void rcbucketstatusCommand(redisClient *c);
 /* check and set redis server transfer status, if the server transfer finished, set as not transfering. */
 void rccastransendCommand(redisClient *c);
 
+/* get locking keys */
+void rclockingkeysCommand(redisClient *c);
 
 /* compute the hash for key */
 uint32_t get_key_hash(sds key, size_t len);
