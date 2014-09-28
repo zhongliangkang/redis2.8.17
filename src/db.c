@@ -474,7 +474,7 @@ void rclockkeyCommand(redisClient *c){
     }else{
         // the key doesnot exist, save it to bucket
         redisAssert(rdb->hk[hashid].locking_nexists_key == NULL);
-        tp = zmalloc(sizeof(char) *sdslen((sds)c->argv[1]->ptr) + 1);
+        tp = zmalloc(sizeof(char) *strlen((char *)c->argv[1]->ptr) + 1);
         rdb->hk[hashid].locking_nexists_key = memcpy(tp, (char *)c->argv[1]->ptr,strlen((char *)c->argv[1]->ptr));
         tp[strlen((char *)c->argv[1]->ptr)]=0;
         addReplyStatusFormat(c,"lock key(not_exists): %s",tp);
@@ -572,14 +572,14 @@ void rctransendkeyCommand(redisClient *c){
 void rctransbeginCommand(redisClient *c){
     redisDb *rdb = c->db;
     long start= REDIS_HASH_BUCKETS+1, end = REDIS_HASH_BUCKETS+1; 
-    sds  str_start,str_end;
+    char * str_start, *str_end;
     long idx = 0;
 
     str_start = c->argv[1]->ptr;
-    str_end   = c->argv[2]->ptr;
+    str_end   = (char *)c->argv[2]->ptr;
 
-    if(! string2l(str_start,sdslen(str_start),&start) || 
-            ! string2l(str_end,sdslen(str_end),&end) ||
+    if(! string2l(str_start,strlen(str_start),&start) || 
+            ! string2l(str_end,strlen(str_end),&end) ||
             start >= REDIS_HASH_BUCKETS || start < 0 ||
             end   >= REDIS_HASH_BUCKETS || end   < 0 ||
             start > end){
@@ -626,17 +626,18 @@ void rctransendCommand(redisClient *c){
     redisDb *rdb = c->db;
     dictEntry * de;
     long start= REDIS_HASH_BUCKETS+1, end = REDIS_HASH_BUCKETS+1; 
-    sds  str_start,str_end;
+    char *  str_start, *str_end;
     long idx = 0;
     int not_in_transfering_flag = 0;  // check if some bucket not in transfering status
     int keys_not_transfered = 0;      // check if some key  not transfered, for trans_out bucket
     int keys_not_normal = 0;          // check if some key  not normal, for trans_in bucket
+    int keys_not_delete = 0;          // when a bucket transfer finished, there should be no keys in it.
 
     str_start = c->argv[1]->ptr;
     str_end   = c->argv[2]->ptr;
 
-    if(! string2l(str_start,sdslen(str_start),&start) || 
-            ! string2l(str_end,sdslen(str_end),&end) ||
+    if(! string2l(str_start,strlen(str_start),&start) || 
+            ! string2l(str_end,strlen(str_end),&end) ||
             start >= REDIS_HASH_BUCKETS || start < 0 ||
             end   >= REDIS_HASH_BUCKETS || end   < 0 ||
             start > end){
@@ -660,20 +661,25 @@ void rctransendCommand(redisClient *c){
                     keys_not_transfered++;
                     break;
                 }
-
                 de = de->hk;
+
+                // not delete key found!
+                keys_not_delete++;
             }
 
-            if(keys_not_transfered > 0){
+            if(keys_not_transfered > 0 || keys_not_delete > 0){
                 break;
             }
         }
 
         if( not_in_transfering_flag > 0){
-            addReplyErrorFormat(c,"seg: %ld is not in transfering.",idx);
+            addReplyErrorFormat(c,"seg: %ld bucket not transfering status.",idx);
+            return;
+        }else if(keys_not_delete > 0){
+            addReplyErrorFormat(c,"seg: %ld some key not deleted.",idx);
             return;
         }else if(keys_not_transfered > 0 ){
-            addReplyErrorFormat(c,"seg: %ld trans out not finished, key: %s",idx, (char *)de->key);
+            addReplyErrorFormat(c,"seg: %ld some key is not transfered status, key: %s",idx, (char *)de->key);
             return;
         }
 
@@ -714,10 +720,10 @@ void rctransendCommand(redisClient *c){
         }
 
         if( not_in_transfering_flag > 0){
-            addReplyErrorFormat(c,"seg: %ld is not in transfering.",idx);
+            addReplyErrorFormat(c,"seg: %ld bucket not transfering status.",idx);
             return;
         }else if(keys_not_normal > 0 ){
-            addReplyErrorFormat(c,"seg: %ld transf in not finished, key: %s",idx, (char *)de->key);
+            addReplyErrorFormat(c,"seg: %ld some key is not normal status, key: %s",idx, (char *)de->key);
             return;
         }
 
@@ -774,8 +780,8 @@ void rcbucketstatusCommand(redisClient *c){
     long int val = 0; // = (uint32_t)strtoul(c->argv[1]->ptr,NULL,10);
 
     /* check the first parameter if is legal */
-    sds keyhash = c->argv[1]->ptr;
-    int hlen = sdslen(keyhash);
+    char * keyhash = c->argv[1]->ptr;
+    int hlen = strlen(keyhash);
     if(!string2l(keyhash, hlen, &val) || val >= REDIS_HASH_BUCKETS || val < 0){
             addReplyError(c,"inlegal hash value");
             return ;

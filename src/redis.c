@@ -1969,7 +1969,7 @@ int check_command_keys(redisClient *c){
     }
 
     for(idx = firstkey; idx <= lastkey; idx += keystep){
-        val = get_key_hash((sds)c->argv[idx]->ptr, sdslen((sds)c->argv[idx]->ptr));
+        val = get_key_hash((char*)c->argv[idx]->ptr, strlen((char*)c->argv[idx]->ptr));
         assert(val < REDIS_HASH_BUCKETS);
 
         if(rdb->hk[val].status == REDIS_BUCKET_TRANSFER_OUT ){

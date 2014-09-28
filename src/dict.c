@@ -494,6 +494,16 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                     /* delete the node from the bucket */
                     tdb->hk[key_hash_val].keys--;
 
+                    /* key is loking.
+                       if the key is expired or be deleted, we should reset the bucket's locking status.
+                       if the key doesnot exist, would not come to here.
+                    */
+                    if(tdb->hk[key_hash_val].ptr_lock_key != NULL &&
+                            strcmp(tdb->hk[key_hash_val].ptr_lock_key->key,key) == 0){
+                            tdb->hk[key_hash_val].ptr_lock_key = NULL;
+                        }
+                    
+
 
                     if(he->hk_pre != NULL){
                         he->hk_pre->hk = he->hk;

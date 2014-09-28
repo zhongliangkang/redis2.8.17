@@ -1471,7 +1471,7 @@ void rccastransendCommand(redisClient *c);
 void rclockingkeysCommand(redisClient *c);
 
 /* compute the hash for key */
-uint32_t get_key_hash(sds key, size_t len);
+uint32_t get_key_hash(char* key, size_t len);
 
 /* this function is same with function propagateExpire  */
 void rctransendkeyDel(redisDb *db, robj *key);
