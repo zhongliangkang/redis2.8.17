@@ -429,6 +429,7 @@ void rctransserverCommand(redisClient *c){
     return;
 }
 
+/* return OK if lock key success, locked if the key has been locked, other failed */
 void rclockkeyCommand(redisClient *c){
     dictEntry * o;
     sds   tp;
@@ -438,20 +439,28 @@ void rclockkeyCommand(redisClient *c){
     redisAssert( & rdb->hk[hashid]);
     if( rdb->hk[hashid].status == REDIS_BUCKET_IN_USING){
         // if bucket in using normally, cannot lock key!
-        addReplyStatus(c,"bucket not in transfering status");
+        addReplyError(c,"bucket not in transfering status");
         return;
     }
 
     // check if another key is locked.
     if( rdb->hk[hashid].ptr_lock_key != NULL){
-        addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key: %s",
-                (char *)rdb->hk[hashid].ptr_lock_key->key);
+        if( strcmp((char *)rdb->hk[hashid].ptr_lock_key->key, (char*) c->argv[1]->ptr) == 0){
+            addReplyStatus(c,"locked");
+        }else{
+            addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key: %s",
+                    (char *)rdb->hk[hashid].ptr_lock_key->key);
+        }
         return;
     }
     // check if a not exists key is locked.
     if( rdb->hk[hashid].locking_nexists_key != NULL){
-        addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key(not_exists): %s.",
-                (char *)rdb->hk[hashid].locking_nexists_key);
+        if( strcmp((char*)rdb->hk[hashid].locking_nexists_key, (char*) c->argv[1]->ptr) == 0){
+            addReplyStatus(c,"locked");
+        }else{
+            addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key(not_exists): %s.",
+                    (char *)rdb->hk[hashid].locking_nexists_key);
+        }
         return;
     }
 
@@ -463,21 +472,29 @@ void rclockkeyCommand(redisClient *c){
 
             /* bucket pointer record locked key info */
             rdb->hk[hashid].ptr_lock_key = o;
-            addReplyLongLong(c,o->o_flag);
+
+            addReply(c, shared.ok);
+            return;
         }else if(o->o_flag == REDIS_KEY_TRANSFERING){
-            /* locked */
+            /* locked, Note: should never come to here!!! */
+            redisAssert(0);
             addReplyStatus(c,"locked");
         }else{
             /* just return the key o_flag */
             addReplyLongLong(c,o->o_flag);
+            return;
         }
     }else{
         // the key doesnot exist, save it to bucket
         redisAssert(rdb->hk[hashid].locking_nexists_key == NULL);
         tp = zmalloc(sizeof(char) *strlen((char *)c->argv[1]->ptr) + 1);
         rdb->hk[hashid].locking_nexists_key = memcpy(tp, (char *)c->argv[1]->ptr,strlen((char *)c->argv[1]->ptr));
-        tp[strlen((char *)c->argv[1]->ptr)]=0;
-        addReplyStatusFormat(c,"lock key(not_exists): %s",tp);
+
+        tp[strlen((char *)c->argv[1]->ptr)]=0; //mark the tail as 0
+
+        //addReplyStatusFormat(c,"lock key(not_exists): %s",tp);
+
+        addReply(c, shared.ok);
         return;
     }
 }
@@ -485,6 +502,7 @@ void rclockkeyCommand(redisClient *c){
 void rcunlockkeyCommand(redisClient *c){
     dictEntry * o;
     char * tp;
+    int unlock_num = 0;
     redisDb   * rdb = c->db;
     uint32_t hashid = get_key_hash((char *) c->argv[1]->ptr, strlen((char*)c->argv[1]->ptr));
     redisAssert( & rdb->hk[hashid]);
@@ -499,21 +517,30 @@ void rcunlockkeyCommand(redisClient *c){
 
             o->o_flag = REDIS_KEY_NORMAL;
             rdb->hk[hashid].ptr_lock_key = NULL;
+
+            unlock_num=1;
         }
 
     }
 
+    // maybe there is a key locked but didnot exists before. we need to release it here.
     if(tp != NULL && strcmp(tp,(char *)c->argv[1]->ptr) == 0){
         zfree(tp);
         rdb->hk[hashid].locking_nexists_key = NULL;
-        addReplyLongLong(c,REDIS_KEY_NORMAL);
+        addReply(c, shared.ok);
         return;
     }
 
     if(o){
-        addReplyLongLong(c,o->o_flag);
+        if(unlock_num){
+            addReply(c, shared.ok);
+            return;
+        }else{
+            addReplyErrorFormat(c,"key is not transfering: %s",(char *)c->argv[1]->ptr);
+            return;
+        }
     } else{
-        addReplyError(c,"key not exist! need to put this key to hash bucket");
+        addReplyError(c,"key not exist!");
     }
 }
 
@@ -521,6 +548,7 @@ void rcunlockkeyCommand(redisClient *c){
 void rctransendkeyCommand(redisClient *c){
     dictEntry * o;
     char * tp;
+    int unlock_num = 0;
     redisDb   * rdb = c->db;
     uint32_t hashid = get_key_hash((char*) c->argv[1]->ptr, strlen((char*)c->argv[1]->ptr));
     redisAssert( & rdb->hk[hashid]);
@@ -549,22 +577,28 @@ void rctransendkeyCommand(redisClient *c){
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
                 "del",c->argv[1],c->db->id);
 
-            addReplyLongLong(c,REDIS_KEY_TRANSFERED);
-            return;
+            // donot return here!
+            unlock_num = 1;
         }
 
     }
     if(tp != NULL && strcmp(tp,(char*)c->argv[1]->ptr) == 0){
         zfree(tp);
         rdb->hk[hashid].locking_nexists_key = NULL;
-        addReplyLongLong(c,REDIS_KEY_TRANSFERED);
+        addReply(c, shared.ok);
         return ;
     }
     if(o){
-        addReplyLongLong(c,o->o_flag);
+        if(unlock_num){
+            addReply(c, shared.ok);
+            return;
+        }
+        addReplyErrorFormat(c,"key is not transfering: %s",(char *)c->argv[1]->ptr);
         return;
+
     } else{
-        addReplyError(c,"key not exist! need to put this key to hash bucket");
+        addReplyError(c,"key not exist!");
+        return;
     }
 }
 
