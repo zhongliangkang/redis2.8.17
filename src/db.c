@@ -683,8 +683,9 @@ void rctransendCommand(redisClient *c){
     if(c->rc_flag == REDIS_CLIENT_TRANS_OUT){
         // check bucket status
         for( idx = start; idx <= end; idx++){
-            if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING){
-                // bucket status not in transfering
+            if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING ||
+                    rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN){
+                // bucket status not in transfering or transfered
                 not_in_transfering_flag = 1;
                 break;
             }
@@ -732,7 +733,8 @@ void rctransendCommand(redisClient *c){
     if(c->rc_flag == REDIS_CLIENT_TRANS_IN){
         // check bucket status
         for( idx = start; idx <= end; idx++){
-            if( rdb->hk[idx].status ==  REDIS_BUCKET_IN_USING){
+            if( rdb->hk[idx].status ==  REDIS_BUCKET_IN_USING ||
+                     rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT){
                 // bucket status not in transfering
                 not_in_transfering_flag = 1;
                 break;
