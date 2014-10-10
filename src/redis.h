@@ -1469,9 +1469,14 @@ void rccastransendCommand(redisClient *c);
 
 /* get locking keys */
 void rclockingkeysCommand(redisClient *c);
-
 /* compute the hash for key */
 uint32_t get_key_hash(char* key, size_t len);
+/* get locking key on bucket. */
+void rcgetlockingkeyCommand(redisClient *c);
+/* stat transfer status  */
+void rctranstatCommand(redisClient *c);
+/* reset buckets status for re-using */
+void rcresetbucketsCommand(redisClient *c);
 
 /* this function is same with function propagateExpire  */
 void rctransendkeyDel(redisDb *db, robj *key);

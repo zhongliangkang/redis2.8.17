@@ -290,8 +290,12 @@ struct redisCommand redisCommandTable[] = {
     {"rctransend",rctransendCommand,3,"awmC",0,NULL,0,0,0,0,0},
 
     {"rckeystatus",rckeystatusCommand,2,"a",0,NULL,1,1,1,0,0},
-    {"rcbucketstatus",rcbucketstatusCommand,2,"a",0,NULL,1,1,1,0,0},
-    {"rclockingkeys",rclockingkeysCommand,1,"a",0,NULL,1,1,1,0,0},
+    {"rcbucketstatus",rcbucketstatusCommand,2,"a",0,NULL,0,0,0,0,0},
+    {"rclockingkeys",rclockingkeysCommand,1,"a",0,NULL,0,0,0,0,0},
+    {"rcgetlockingkey",rcgetlockingkeyCommand,2,"a",0,NULL,0,0,0,0,0},
+    {"rctranstat",rctranstatCommand,1,"a",0,NULL,0,0,0,0,0},
+    {"rcresetbuckets",rcresetbucketsCommand,3,"a",0,NULL,0,0,0,0,0},
+
     {"rccastransend",rccastransendCommand,1,"awC",0,NULL,0,0,0,0,0}
 };
 
