@@ -834,6 +834,20 @@ void rcresetbucketsCommand(redisClient *c){
             rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
         }
 
+        // change server.svr_in_transfer = 0 if all bucket is in using.
+        int not_in_using = 0;
+        for (idx = 0; idx < REDIS_HASH_BUCKETS; idx ++){
+            if(rdb->hk[idx].status != REDIS_BUCKET_IN_USING) {
+                not_in_using = 1;
+                break;
+            }
+        }
+
+        if(not_in_using == 0 ){
+            // all bucket in runing,change the server status
+            server.svr_in_transfer = 0;
+        }
+
         addReply(c,shared.ok);
         return;
     }
@@ -958,11 +972,13 @@ void rctranstatCommand(redisClient *c){
 
     sds stat = sdsempty();
     stat = sdscatprintf(stat,
-            "# Transfer stats"
+            "# Transfer stats\r\n"
+            "redis_trans_flag: %d\r\n"
             "inusing: %ld\r\n"
             "transfer_in: %ld\r\n"
             "transfer_out: %ld\r\n"
             "transfered: %ld\r\n",
+            server.svr_in_transfer,
             using,transin,transout,transfered);
 
     addReplySds(c,sdscatprintf(sdsempty(),"$%lu\r\n",
@@ -990,7 +1006,6 @@ void rccastransendCommand(redisClient *c){
 
     // all transfered
     if( transfering == 0 ){
-        server.svr_in_transfer = 0;
         addReply(c, shared.ok);
     }else{
         addReplyStatusFormat(c, "using: %ld, transfering: %ld, transfered: %ld ",using,transfering,transfered);
