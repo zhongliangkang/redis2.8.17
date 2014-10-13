@@ -235,10 +235,10 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
                 //printf("op:%s, key:%s\n",top,tkey);
 
-                if( (strcmp(top,"get") ==0 &&
-                         tr->str &&
-                        strcmp(tr->str,tkey)) || tr->type != REDIS_REPLY_STRING){
-                    printf("ERROR: cmd: get %s ,ret: %s\n",tkey, tr->str);
+                if( strcmp(top,"get") == 0 &&
+                        (( tr->str &&
+                        strcmp(tr->str,tkey)) || tr->type == REDIS_REPLY_NIL )){
+                    printf("ERROR: cmd: %s %s ,ret: %s\n",top,tkey, tr->str);
                 }
 
                 freeReplyObject(reply);
