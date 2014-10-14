@@ -238,7 +238,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 if( strcmp(top,"get") == 0 &&
                         (( tr->str &&
                         strcmp(tr->str,tkey)) || tr->type == REDIS_REPLY_NIL )){
-                    printf("ERROR: cmd: %s %s ,ret: %s\n",top,tkey, tr->str);
+                    fprintf(stderr,"ERROR: cmd: %s %s ,ret: %s\n",top,tkey, tr->str);
                 }
 
                 freeReplyObject(reply);
