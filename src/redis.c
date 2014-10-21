@@ -2059,6 +2059,7 @@ void call(redisClient *c, int flags) {
             return ;
         }else{
             addReplyError(c,"KEY_TRANSFERING");
+            return ;
         }
     }
 
