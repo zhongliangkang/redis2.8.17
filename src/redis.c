@@ -294,7 +294,7 @@ struct redisCommand redisCommandTable[] = {
     {"rclockingkeys",rclockingkeysCommand,1,"a",0,NULL,0,0,0,0,0},
     {"rcgetlockingkey",rcgetlockingkeyCommand,2,"a",0,NULL,0,0,0,0,0},
     {"rctranstat",rctranstatCommand,1,"a",0,NULL,0,0,0,0,0},
-    {"rcresetbuckets",rcresetbucketsCommand,3,"a",0,NULL,0,0,0,0,0},
+    {"rcresetbuckets",rcresetbucketsCommand,3,"aC",0,NULL,0,0,0,0,0},
 
     {"rccastransend",rccastransendCommand,1,"awC",0,NULL,0,0,0,0,0}
 };
@@ -1558,6 +1558,7 @@ void initHashBucket(struct hashBucket * bkt){
         tbkt->list_head = NULL; /* init as NULL */
         tbkt->ptr_lock_key = NULL;
         tbkt->locking_nexists_key = NULL;
+        tbkt->fd = REDIS_BUCKET_INIT_FD;
 
         tbkt++;
     }
@@ -2168,6 +2169,15 @@ int processCommand(redisClient *c) {
             c->cmd->name);
         return REDIS_OK;
     }
+
+    /* process ECHO RCTRANS manage_command. test only! */
+    /*
+    if (c->cmd->proc == mgetCommand ){
+        if(!strcasecmp(c->argv[1]->ptr,"___transfer___")) {
+            printf("mget TRANSFER get\n");
+        }
+    }
+    */
 
     /* Check if the user is authenticated */
     if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)

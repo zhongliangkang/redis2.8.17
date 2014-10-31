@@ -941,6 +941,7 @@ int processMultibulkBuffer(redisClient *c) {
     int pos = 0, ok;
     long long ll;
 
+
     if (c->multibulklen == 0) {
         /* The client should have been reset */
         redisAssertWithInfo(c,NULL,c->argc == 0);
@@ -981,6 +982,7 @@ int processMultibulkBuffer(redisClient *c) {
         if (c->argv) zfree(c->argv);
         c->argv = zmalloc(sizeof(robj*)*c->multibulklen);
     }
+    //printf("in processMultibulkBuffer:%d\n",c->multibulklen);
 
     redisAssertWithInfo(c,NULL,c->multibulklen > 0);
     while(c->multibulklen) {
@@ -1057,6 +1059,15 @@ int processMultibulkBuffer(redisClient *c) {
             } else {
                 c->argv[c->argc++] =
                     createStringObject(c->querybuf+pos,c->bulklen);
+                //printf("in processMultibulkBuffer: x:%.*s\n",c->bulklen,c->querybuf+pos);
+                if(c->argc == 2 && 
+                        !strcasecmp(c->argv[1]->ptr,"___transfer___") &&
+                        !strcasecmp(c->argv[0]->ptr,"mget") ){
+                    c->argc = 0;
+                    freeStringObject(c->argv[0]);
+                    freeStringObject(c->argv[1]);
+                }
+
                 pos += c->bulklen+2;
             }
             c->bulklen = -1;
@@ -1101,6 +1112,8 @@ void processInputBuffer(redisClient *c) {
         } else {
             redisPanic("Unknown request type");
         }
+
+        //printf("after process:argc: %d  ",c->argc);
 
         /* Multibulk processing could see a <= 0 length. */
         if (c->argc == 0) {
@@ -1277,7 +1290,7 @@ sds catClientInfoString(sds s, redisClient *client) {
     if (emask & AE_WRITABLE) *p++ = 'w';
     *p = '\0';
     return sdscatfmt(s,
-        "id=%U addr=%s fd=%i name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U obl=%U oll=%U omem=%U events=%s cmd=%s",
+        "id=%U addr=%s fd=%i name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U obl=%U oll=%U omem=%U events=%s transflag=%i cmd=%s",
         (unsigned long long) client->id,
         getClientPeerId(client),
         client->fd,
@@ -1295,6 +1308,7 @@ sds catClientInfoString(sds s, redisClient *client) {
         (unsigned long long) listLength(client->reply),
         (unsigned long long) getClientOutputBufferMemoryUsage(client),
         events,
+        client->rc_flag,
         client->lastcmd ? client->lastcmd->name : "NULL");
 }
 

@@ -187,6 +187,9 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
 
+/* Define bucket default fd as -2, while in aof fake client's fd is -1 */
+#define REDIS_BUCKET_INIT_FD  -2
+
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object
  * is set to one of this fields for this object. */
@@ -430,6 +433,8 @@ typedef struct hashBucket{
     dictEntry * list_head;    /* link bucket items */
     dictEntry * ptr_lock_key; /* point to key locked */
     void *    locking_nexists_key;    /* store the key string when key doesnot exists */
+
+    int     fd;     /* record the current transfer client fd, to avoid multi-transfer server started */
 } hashbucket;
 
 

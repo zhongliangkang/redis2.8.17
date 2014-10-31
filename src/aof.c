@@ -414,6 +414,49 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     return dst;
 }
 
+sds catAppendOnlyManageCommand(sds dst, int argc, robj **argv) {
+    char buf[32];
+    int len, j;
+    robj *o;
+
+    buf[0] = '*';
+    len = 1+ll2string(buf+1,sizeof(buf)-1,argc + 2);  // add 'mget ___transfer___' to manage commands header
+    buf[len++] = '\r';
+    buf[len++] = '\n';
+    dst = sdscatlen(dst,buf,len);
+
+    // add 'mget'
+    buf[0] = '$';
+    len = 1+ll2string(buf+1,sizeof(buf)-1,4);
+    buf[len++] = '\r';
+    buf[len++] = '\n';
+    dst = sdscatlen(dst,buf,len);
+    dst = sdscatlen(dst,"mget",4);
+    dst = sdscatlen(dst,"\r\n",2);
+
+    // add '___transfer___'
+    buf[0] = '$';
+    len = 1+ll2string(buf+1,sizeof(buf)-1,14);
+    buf[len++] = '\r';
+    buf[len++] = '\n';
+    dst = sdscatlen(dst,buf,len);
+    dst = sdscatlen(dst,"___transfer___",14);
+    dst = sdscatlen(dst,"\r\n",2);
+
+    for (j = 0; j < argc; j++) {
+        o = getDecodedObject(argv[j]);
+        buf[0] = '$';
+        len = 1+ll2string(buf+1,sizeof(buf)-1,sdslen(o->ptr));
+        buf[len++] = '\r';
+        buf[len++] = '\n';
+        dst = sdscatlen(dst,buf,len);
+        dst = sdscatlen(dst,o->ptr,sdslen(o->ptr));
+        dst = sdscatlen(dst,"\r\n",2);
+        decrRefCount(o);
+    }
+    return dst;
+}
+
 /* Create the sds representation of an PEXPIREAT command, using
  * 'seconds' as time to live and 'cmd' to understand what command
  * we are translating into a PEXPIREAT.
@@ -482,7 +525,11 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         /* All the other commands don't need translation or need the
          * same translation already operated in the command vector
          * for the replication itself. */
-        buf = catAppendOnlyGenericCommand(buf,argc,argv);
+        if(cmd->flags & REDIS_CMD_TRANSFER ){
+            buf = catAppendOnlyManageCommand(buf,argc,argv);
+        }else{
+            buf = catAppendOnlyGenericCommand(buf,argc,argv);
+        }
     }
 
     /* Append to the AOF buffer. This will be flushed on disk just before

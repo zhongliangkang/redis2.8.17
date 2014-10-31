@@ -446,6 +446,7 @@ void rclockkeyCommand(redisClient *c){
     // check if another key is locked.
     if( rdb->hk[hashid].ptr_lock_key != NULL){
         if( strcmp((char *)rdb->hk[hashid].ptr_lock_key->key, (char*) c->argv[1]->ptr) == 0){
+            server.dirty++;
             addReplyStatus(c,"locked");
         }else{
             addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key: %s",
@@ -456,6 +457,7 @@ void rclockkeyCommand(redisClient *c){
     // check if a not exists key is locked.
     if( rdb->hk[hashid].locking_nexists_key != NULL){
         if( strcmp((char*)rdb->hk[hashid].locking_nexists_key, (char*) c->argv[1]->ptr) == 0){
+            server.dirty++;
             addReplyStatus(c,"locked");
         }else{
             addReplyStatusFormat(c,"lock failed, only one key can be locked. locking key(not_exists): %s.",
@@ -473,14 +475,17 @@ void rclockkeyCommand(redisClient *c){
             /* bucket pointer record locked key info */
             rdb->hk[hashid].ptr_lock_key = o;
 
+            server.dirty++;
             addReply(c, shared.ok);
             return;
         }else if(o->o_flag == REDIS_KEY_TRANSFERING){
             /* locked, Note: should never come to here!!! */
             redisAssert(0);
             addReplyStatus(c,"locked");
+            return;
         }else{
             /* just return the key o_flag */
+            server.dirty++;
             addReplyLongLong(c,o->o_flag);
             return;
         }
@@ -494,6 +499,7 @@ void rclockkeyCommand(redisClient *c){
 
         //addReplyStatusFormat(c,"lock key(not_exists): %s",tp);
 
+        server.dirty++;
         addReply(c, shared.ok);
         return;
     }
@@ -527,12 +533,14 @@ void rcunlockkeyCommand(redisClient *c){
     if(tp != NULL && strcmp(tp,(char *)c->argv[1]->ptr) == 0){
         zfree(tp);
         rdb->hk[hashid].locking_nexists_key = NULL;
+        server.dirty++;
         addReply(c, shared.ok);
         return;
     }
 
     if(o){
         if(unlock_num){
+            server.dirty++;
             addReply(c, shared.ok);
             return;
         }else{
@@ -585,11 +593,13 @@ void rctransendkeyCommand(redisClient *c){
     if(tp != NULL && strcmp(tp,(char*)c->argv[1]->ptr) == 0){
         zfree(tp);
         rdb->hk[hashid].locking_nexists_key = NULL;
+        server.dirty++;
         addReply(c, shared.ok);
         return ;
     }
     if(o){
         if(unlock_num){
+            server.dirty++;
             addReply(c, shared.ok);
             return;
         }
@@ -600,6 +610,45 @@ void rctransendkeyCommand(redisClient *c){
         addReplyError(c,"key not exist!");
         return;
     }
+}
+
+// check bucket is transfering by some transfer
+// if the transfer client is not exists,maybe the client exist unnormal,return 0.
+int check_bucket_transfering(redisClient *c, int bid){
+    redisDb *rdb = c->db;
+
+    // out of range bucket id
+    if( bid<1 || bid >= REDIS_HASH_BUCKETS)
+        return 0;
+
+    int trans_fd = rdb->hk[bid].fd;
+    listNode *ln;
+    listIter li;
+    redisClient *client;
+    printf("check_bucket_transfering: %d %d\n",bid,trans_fd);
+
+    // current client is the transfer fd,return 0
+    if(c->fd == trans_fd){
+        return 0;
+    }
+
+    // aof thread
+    if(c->fd == -1 ){
+        return 0;
+    }
+
+    listRewind(server.clients, &li);
+    while( (ln = listNext(&li)) != NULL){
+        client = listNodeValue(ln);
+
+        if(client->fd == trans_fd && 
+                (client->rc_flag == REDIS_CLIENT_TRANS_OUT ||
+                client->rc_flag == REDIS_CLIENT_TRANS_IN)){
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 
@@ -637,13 +686,15 @@ void rctransbeginCommand(redisClient *c){
     }
 
     if( in_using_flag ){
-
         // only 1 bucket, and the bucket is transfering
         if( start == end &&
                 ((c->rc_flag == REDIS_CLIENT_TRANS_IN && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_IN ) ||
-                 (c->rc_flag == REDIS_CLIENT_TRANS_OUT && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_OUT))){
+                 (c->rc_flag == REDIS_CLIENT_TRANS_OUT && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_OUT)) &&
+                !check_bucket_transfering(c,start)){
             bucket_locking = 1;
             addReplyStatus(c,"transfering");
+            rdb->hk[start].fd = c->fd;
+            server.dirty++;
             return;
         }
 
@@ -661,11 +712,15 @@ void rctransbeginCommand(redisClient *c){
             }else{
                 // noting. should never come to here.
             }
+
+            // record the fd to bucket, to avoid more than 1 transfer started
+            rdb->hk[idx].fd = c->fd;
         }
     }
 
     server.svr_in_transfer = 1;  // set redis server to  transfering status
     addReply(c,shared.ok);
+    server.dirty++;
 
     return;
 }
@@ -738,9 +793,11 @@ void rctransendCommand(redisClient *c){
             // NOTE: only set bucket TRANSFER_OUT to TRANSFERED, other status do not transfer!!
             if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT){
                 rdb->hk[idx].status = REDIS_BUCKET_TRANSFERED;
+                rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;
             }
         }
         addReply(c,shared.ok);
+        server.dirty++;
         return;
     }
     
@@ -783,9 +840,11 @@ void rctransendCommand(redisClient *c){
             // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
             if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN){
                 rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
+                rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;
             }
         }
         addReply(c,shared.ok);
+        server.dirty++;
         return;
     }
 
@@ -832,6 +891,7 @@ void rcresetbucketsCommand(redisClient *c){
 
         for( idx = start; idx <= end; idx++){
             rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
+            rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;    /* set again for safe */
         }
 
         // change server.svr_in_transfer = 0 if all bucket is in using.
@@ -848,6 +908,7 @@ void rcresetbucketsCommand(redisClient *c){
             server.svr_in_transfer = 0;
         }
 
+        server.dirty++;
         addReply(c,shared.ok);
         return;
     }
@@ -1006,6 +1067,7 @@ void rccastransendCommand(redisClient *c){
 
     // all transfered
     if( transfering == 0 ){
+        server.dirty++;
         addReply(c, shared.ok);
     }else{
         addReplyStatusFormat(c, "using: %ld, transfering: %ld, transfered: %ld ",using,transfering,transfered);
