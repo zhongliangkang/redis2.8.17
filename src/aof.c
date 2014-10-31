@@ -568,7 +568,7 @@ struct redisClient *createFakeClient(void) {
     c->flags = 0;
     /* We set the fake client as a slave waiting for the synchronization
      * so that Redis will not try to send replies to this client. */
-    c->rc_flag = REDIS_CLIENT_TRANS_NORMAL;
+    c->rc_flag = REDIS_CLIENT_TRANS_SLAVE;
     c->replstate = REDIS_REPL_WAIT_BGSAVE_START;
     c->reply = listCreate();
     c->reply_bytes = 0;
@@ -655,6 +655,8 @@ int loadAppendOnlyFile(char *filename) {
         fakeClient->argc = argc;
         fakeClient->argv = argv;
 
+        int argc_skip=0;
+
         for (j = 0; j < argc; j++) {
             if (fgets(buf,sizeof(buf),fp) == NULL) {
                 fakeClient->argc = j; /* Free up to j-1. */
@@ -670,11 +672,20 @@ int loadAppendOnlyFile(char *filename) {
                 freeFakeClientArgv(fakeClient);
                 goto readerr;
             }
-            argv[j] = createObject(REDIS_STRING,argsds);
+            argv[j - argc_skip] = createObject(REDIS_STRING,argsds);
             if (fread(buf,2,1,fp) == 0) {
                 fakeClient->argc = j+1; /* Free up to j. */
                 freeFakeClientArgv(fakeClient);
                 goto readerr; /* discard CRLF */
+            }
+
+            if(j==1 && !strcasecmp(argv[0]->ptr,"mget") &&
+                    !strcasecmp(argv[1]->ptr,"___transfer___")){
+                argc_skip=2;
+                fakeClient->argc = argc-2;
+                zfree(argv);
+                argv = zmalloc(sizeof(robj*)*(argc-2));
+                fakeClient->argv = argv;
             }
         }
 

@@ -824,6 +824,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         zfree(server.repl_transfer_tmpfile);
         close(server.repl_transfer_fd);
         server.master = createClient(server.repl_transfer_s);
+        server.master->rc_flag = REDIS_CLIENT_TRANS_SLAVE;
         server.master->flags |= REDIS_MASTER;
         server.master->authenticated = 1;
         server.repl_state = REDIS_REPL_CONNECTED;

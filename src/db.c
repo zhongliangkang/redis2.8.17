@@ -562,8 +562,16 @@ void rctransendkeyCommand(redisClient *c){
     redisAssert( & rdb->hk[hashid]);
     tp = rdb->hk[hashid].locking_nexists_key;
 
-    /* only transfer out client can run this command. */
-    if(c->rc_flag != REDIS_CLIENT_TRANS_OUT){
+    int trans_out_or_slave = 0;
+
+    /* trans out or slave */
+    if(c->rc_flag == REDIS_CLIENT_TRANS_OUT ||
+            c->rc_flag == REDIS_CLIENT_TRANS_SLAVE){
+        trans_out_or_slave = 1;
+    }
+
+    /* only transfer out/slave client can run this command. */
+    if(!trans_out_or_slave){
         addReplyError(c,"Only transfer_out client can run RCTRANSENDKEY command");
         return;
     }
@@ -637,6 +645,11 @@ int check_bucket_transfering(redisClient *c, int bid){
         return 0;
     }
 
+    // slave thread
+    if(c->rc_flag == REDIS_CLIENT_TRANS_SLAVE){
+        return 0;
+    }
+
     listRewind(server.clients, &li);
     while( (ln = listNext(&li)) != NULL){
         client = listNodeValue(ln);
@@ -657,9 +670,22 @@ void rctransbeginCommand(redisClient *c){
     long start= REDIS_HASH_BUCKETS+1, end = REDIS_HASH_BUCKETS+1; 
     char * str_start, *str_end;
     long idx = 0;
+    int trans_out_or_slave=0;
+    int trans_in_or_slave=0;
 
-    str_start = c->argv[1]->ptr;
-    str_end   = (char *)c->argv[2]->ptr;
+    if((c->rc_flag == REDIS_CLIENT_TRANS_IN  || c->rc_flag == REDIS_CLIENT_TRANS_SLAVE) &&
+            !strcmp(c->argv[1]->ptr,"in")){
+        trans_in_or_slave = 1;
+    }else if((c->rc_flag == REDIS_CLIENT_TRANS_OUT  || c->rc_flag == REDIS_CLIENT_TRANS_SLAVE) &&
+            !strcmp(c->argv[1]->ptr,"out")){
+        trans_out_or_slave = 1;
+    }else{
+        addReplyError(c,"Wrong transbegin type");
+        return;
+    }
+
+    str_start = c->argv[2]->ptr;
+    str_end   = (char *)c->argv[3]->ptr;
 
     if(! string2l(str_start,strlen(str_start),&start) || 
             ! string2l(str_end,strlen(str_end),&end) ||
@@ -669,6 +695,8 @@ void rctransbeginCommand(redisClient *c){
         addReplyError(c,"Invalid hash segments");
         return;
     }
+
+
     // parameter ok
     //addReplyStatusFormat(c,"start: %ld, end: %ld",start,end);
     int in_using_flag = 0;
@@ -678,7 +706,7 @@ void rctransbeginCommand(redisClient *c){
     for( idx = start; idx <= end; idx++){
         if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN || 
                 rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT || 
-                (rdb->hk[idx].status == REDIS_BUCKET_TRANSFERED && c->rc_flag == REDIS_CLIENT_TRANS_IN)){
+                (rdb->hk[idx].status == REDIS_BUCKET_TRANSFERED && trans_in_or_slave)){
             // bucket status in transfering
             in_using_flag = 1;
             break;
@@ -688,8 +716,8 @@ void rctransbeginCommand(redisClient *c){
     if( in_using_flag ){
         // only 1 bucket, and the bucket is transfering
         if( start == end &&
-                ((c->rc_flag == REDIS_CLIENT_TRANS_IN && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_IN ) ||
-                 (c->rc_flag == REDIS_CLIENT_TRANS_OUT && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_OUT)) &&
+                ((trans_in_or_slave && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_IN ) ||
+                 (trans_out_or_slave && rdb->hk[start].status == REDIS_BUCKET_TRANSFER_OUT)) &&
                 !check_bucket_transfering(c,start)){
             bucket_locking = 1;
             addReplyStatus(c,"transfering");
@@ -705,16 +733,20 @@ void rctransbeginCommand(redisClient *c){
     for(idx = start; idx <= end; idx++){
         // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
         if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING ){
-            if(c->rc_flag == REDIS_CLIENT_TRANS_OUT){
+            if(trans_out_or_slave){
                 rdb->hk[idx].status = REDIS_BUCKET_TRANSFER_OUT;
-            }else if(c->rc_flag == REDIS_CLIENT_TRANS_IN){
+            }else if(trans_in_or_slave){
                 rdb->hk[idx].status = REDIS_BUCKET_TRANSFER_IN;
             }else{
                 // noting. should never come to here.
             }
 
-            // record the fd to bucket, to avoid more than 1 transfer started
-            rdb->hk[idx].fd = c->fd;
+            // record the fd to bucket, to avoid more than 1 transfer started. slave set it as init fd
+            if(c->rc_flag == REDIS_CLIENT_TRANS_SLAVE){
+                rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;
+            }else{
+                rdb->hk[idx].fd = c->fd;
+            }
         }
     }
 
@@ -736,9 +768,23 @@ void rctransendCommand(redisClient *c){
     int keys_not_transfered = 0;      // check if some key  not transfered, for trans_out bucket
     int keys_not_normal = 0;          // check if some key  not normal, for trans_in bucket
     int keys_not_delete = 0;          // when a bucket transfer finished, there should be no keys in it.
+    int trans_out_or_slave=0;
+    int trans_in_or_slave=0;
 
-    str_start = c->argv[1]->ptr;
-    str_end   = c->argv[2]->ptr;
+    if((c->rc_flag == REDIS_CLIENT_TRANS_IN  || c->rc_flag == REDIS_CLIENT_TRANS_SLAVE) &&
+            !strcmp(c->argv[1]->ptr,"in")){
+        trans_in_or_slave = 1;
+    }else if((c->rc_flag == REDIS_CLIENT_TRANS_OUT  || c->rc_flag == REDIS_CLIENT_TRANS_SLAVE) &&
+            !strcmp(c->argv[1]->ptr,"out")){
+        trans_out_or_slave = 1;
+    }else{
+        addReplyError(c,"Wrong transbegin type");
+        return;
+    }
+
+
+    str_start = c->argv[2]->ptr;
+    str_end   = c->argv[3]->ptr;
 
     if(! string2l(str_start,strlen(str_start),&start) || 
             ! string2l(str_end,strlen(str_end),&end) ||
@@ -749,8 +795,9 @@ void rctransendCommand(redisClient *c){
         return;
     }
 
+
     // for trans out bucket
-    if(c->rc_flag == REDIS_CLIENT_TRANS_OUT){
+    if(trans_out_or_slave){
         // check bucket status
         for( idx = start; idx <= end; idx++){
             if( rdb->hk[idx].status == REDIS_BUCKET_IN_USING ||
@@ -802,7 +849,7 @@ void rctransendCommand(redisClient *c){
     }
     
     // for trans in server
-    if(c->rc_flag == REDIS_CLIENT_TRANS_IN){
+    if(trans_in_or_slave){
         // check bucket status
         for( idx = start; idx <= end; idx++){
             if( rdb->hk[idx].status ==  REDIS_BUCKET_IN_USING ||

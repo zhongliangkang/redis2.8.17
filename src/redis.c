@@ -286,8 +286,8 @@ struct redisCommand redisCommandTable[] = {
     {"rclockkey",rclockkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
     {"rcunlockkey",rcunlockkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
     {"rctransendkey",rctransendkeyCommand,2,"awC",0,NULL,1,1,1,0,0},
-    {"rctransbegin",rctransbeginCommand,3,"awC",0,NULL,0,0,0,0,0},
-    {"rctransend",rctransendCommand,3,"awmC",0,NULL,0,0,0,0,0},
+    {"rctransbegin",rctransbeginCommand,4,"awC",0,NULL,0,0,0,0,0},
+    {"rctransend",rctransendCommand,4,"awmC",0,NULL,0,0,0,0,0},
 
     {"rckeystatus",rckeystatusCommand,2,"a",0,NULL,1,1,1,0,0},
     {"rcbucketstatus",rcbucketstatusCommand,2,"a",0,NULL,0,0,0,0,0},
@@ -2171,13 +2171,13 @@ int processCommand(redisClient *c) {
     }
 
     /* process ECHO RCTRANS manage_command. test only! */
-    /*
+    
     if (c->cmd->proc == mgetCommand ){
         if(!strcasecmp(c->argv[1]->ptr,"___transfer___")) {
             printf("mget TRANSFER get\n");
         }
     }
-    */
+    
 
     /* Check if the user is authenticated */
     if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)
