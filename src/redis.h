@@ -1487,6 +1487,8 @@ void rcresetbucketsCommand(redisClient *c);
 /* this function is same with function propagateExpire  */
 void rctransendkeyDel(redisDb *db, robj *key);
 
+/* rcsetbucketstatusCommand, called internal only! */
+void rcsetbucketstatusCommand(redisClient *c);
 
 
 #if defined(__GNUC__)

@@ -296,6 +296,8 @@ struct redisCommand redisCommandTable[] = {
     {"rctranstat",rctranstatCommand,1,"a",0,NULL,0,0,0,0,0},
     {"rcresetbuckets",rcresetbucketsCommand,3,"aC",0,NULL,0,0,0,0,0},
 
+    {"rcsetbucketstatus",rcsetbucketstatusCommand,3,"aC",0,NULL,0,0,0,0,0}, /* note: this can only be called internal  */
+
     {"rccastransend",rccastransendCommand,1,"awC",0,NULL,0,0,0,0,0}
 };
 

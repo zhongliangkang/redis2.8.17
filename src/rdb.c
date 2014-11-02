@@ -299,6 +299,20 @@ int rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
     return nwritten;
 }
 
+/* Save a string object as [len][data] on disk. If the object is a string
+ * representation of an integer value we try to save it in a special form */
+int rdbSaveManageString(rio *rdb, unsigned char *s, size_t len) {
+    int n, nwritten = 0;
+    /* Store verbatim */
+    if ((n = rdbSaveLen(rdb,len)) == -1) return -1;
+    nwritten += n;
+    if (len > 0) {
+        if (rdbWriteRaw(rdb,s,len) == -1) return -1;
+        nwritten += len;
+    }
+    return nwritten;
+}
+
 /* Save a long long value as either an encoded string or a string. */
 int rdbSaveLongLongAsStringObject(rio *rdb, long long value) {
     unsigned char buf[32];
@@ -355,11 +369,35 @@ robj *rdbGenericLoadStringObject(rio *rdb, int encode) {
         sdsfree(val);
         return NULL;
     }
+
+    return createObject(REDIS_STRING,val);
+}
+
+robj *rdbGenericLoadBucketStatus(rio *rdb,int encode, redisDb *db){
+    uint32_t len; 
+    sds val; 
+
+    len = rdbLoadLen(rdb,NULL);
+
+    if (len == REDIS_RDB_LENERR) return NULL;
+    val = sdsnewlen(NULL,len);
+    if (len && rioRead(rdb,val,len) == 0) { 
+        sdsfree(val);
+        return NULL;
+    }    
+
+    fprintf(stderr,"val:%s\n",val);
+
+
     return createObject(REDIS_STRING,val);
 }
 
 robj *rdbLoadStringObject(rio *rdb) {
     return rdbGenericLoadStringObject(rdb,0);
+}
+
+robj *rdbLoadBucketStatus(rio *rdb, redisDb *db){
+    return rdbGenericLoadBucketStatus(rdb,1,db);
 }
 
 robj *rdbLoadEncodedStringObject(rio *rdb) {
@@ -626,6 +664,28 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val,
     return 1;
 }
 
+/* Save buckets transfer status and locking keys in redis db */
+int rdbSaveTransferStatus(rio *rdb, redisDb *db){
+    int idx=0;
+    char mstr[100];
+    uint32_t len;
+
+    for (idx=0; idx< REDIS_HASH_BUCKETS; idx++){
+        /* we only record transfering bucket status. */
+        if(db->hk[idx].status != REDIS_BUCKET_IN_USING){
+            // record save type
+            if (rdbSaveType(rdb,REDIS_RDB_OPCODE_TRANSINFO) == -1) goto werr;
+            len = snprintf(mstr,100,"%d:%d", idx, db->hk[idx].status);
+
+            printf("save len:%ul\n",len);
+            if (rdbSaveManageString(rdb, (unsigned char *)mstr, len) == -1) goto werr;
+        }
+    }
+
+werr:
+    return 1;
+}
+
 /* Save the DB on disk. Return REDIS_ERR on error, REDIS_OK on success */
 int rdbSave(char *filename) {
     dictIterator *di = NULL;
@@ -654,17 +714,23 @@ int rdbSave(char *filename) {
 
     for (j = 0; j < server.dbnum; j++) {
         redisDb *db = server.db+j;
+
+        /* Write the SELECT DB opcode */
+        if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_SELECTDB) == -1) goto werr;
+        if (rdbSaveLen(&rdb,j) == -1) goto werr;
+
         dict *d = db->dict;
-        if (dictSize(d) == 0) continue;
+        if (dictSize(d) == 0) {
+            /* record the buckets' status and locking keys.this should not fail. */
+            //if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_TRANSINFO) == -1) goto werr;
+            rdbSaveTransferStatus(&rdb, db);
+            continue;
+        }
         di = dictGetSafeIterator(d);
         if (!di) {
             fclose(fp);
             return REDIS_ERR;
         }
-
-        /* Write the SELECT DB opcode */
-        if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_SELECTDB) == -1) goto werr;
-        if (rdbSaveLen(&rdb,j) == -1) goto werr;
 
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
@@ -676,7 +742,12 @@ int rdbSave(char *filename) {
             expire = getExpire(db,&key);
             if (rdbSaveKeyValuePair(&rdb,&key,o,expire,now) == -1) goto werr;
         }
+
         dictReleaseIterator(di);
+
+        /* record the buckets' status and locking keys.this should not fail. */
+        //if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_TRANSINFO) == -1) goto werr;
+        rdbSaveTransferStatus(&rdb, db);
     }
     di = NULL; /* So that we don't release it again on error. */
 
@@ -1112,6 +1183,7 @@ int rdbLoad(char *filename) {
     startLoading(fp);
     while(1) {
         robj *key, *val;
+        robj *tt;
         expiretime = -1;
 
         /* Read type. */
@@ -1129,6 +1201,11 @@ int rdbLoad(char *filename) {
             if ((expiretime = rdbLoadMillisecondTime(&rdb)) == -1) goto eoferr;
             /* We read the time so we need to read the object type again. */
             if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
+        }else if(type == REDIS_RDB_OPCODE_TRANSINFO){
+            //if (rdbLoadBucketStatus(&rdb,db)) goto eoferr;
+            tt = rdbLoadBucketStatus(&rdb, db);
+            freeStringObject(tt);
+            continue;
         }
 
         if (type == REDIS_RDB_OPCODE_EOF)

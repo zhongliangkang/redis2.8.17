@@ -620,6 +620,53 @@ void rctransendkeyCommand(redisClient *c){
     }
 }
 
+int check_bucket_status_leagal(int status){
+    switch(status){
+        case REDIS_BUCKET_IN_USING:
+        case REDIS_BUCKET_TRANSFER_IN:
+        case REDIS_BUCKET_TRANSFER_OUT:
+        case REDIS_BUCKET_TRANSFERED:
+            return 0;
+        default:
+            return 0;
+    }
+}
+
+/* set redis bucket status internal only*/
+void rcsetbucketstatusCommand(redisClient *c){
+    redisDb *rdb = c->db;
+    char *strbucket, *strstatus;
+    long bid, status;
+
+    /* check client, only aof/or replication thread allowed to run this command */
+    if( c->rc_flag != REDIS_CLIENT_TRANS_SLAVE){
+        addReplyLongLong(c,0);  /* not aof/replication thread, return 0 */
+        return;
+    }
+
+    strbucket = c->argv[1]->ptr;
+    strstatus = c->argv[2]->ptr;
+
+    /* check parameters */
+    if(! string2l(strbucket,strlen(strbucket),&bid) || 
+            ! string2l(strstatus,strlen(strstatus),&status) ||
+            bid <0 || bid >=REDIS_HASH_BUCKETS ||
+            check_bucket_status_leagal(status)){
+        printf("rcsetbucketstatusCommand: parameter err.bid: %ld, status: %ld\n",bid,status);
+        addReplyLongLong(c,0);  /* parameters err */
+        return;
+    }
+
+    if(rdb->hk[bid].status == REDIS_BUCKET_IN_USING ){ /* only in_using bucket can set? if needed. */
+        rdb->hk[bid].status = status;
+        addReplyLongLong(c,1); 
+        return;
+    }
+
+    addReplyLongLong(c,0);  /* bucket not in transfering status */
+    return;
+}
+
 // check bucket is transfering by some transfer
 // if the transfer client is not exists,maybe the client exist unnormal,return 0.
 int check_bucket_transfering(redisClient *c, int bid){
@@ -633,7 +680,7 @@ int check_bucket_transfering(redisClient *c, int bid){
     listNode *ln;
     listIter li;
     redisClient *client;
-    printf("check_bucket_transfering: %d %d\n",bid,trans_fd);
+    //printf("check_bucket_transfering: %d %d\n",bid,trans_fd);
 
     // current client is the transfer fd,return 0
     if(c->fd == trans_fd){
