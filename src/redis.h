@@ -188,8 +188,8 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_ZSET 3
 #define REDIS_HASH 4
 
-/* Define bucket default fd as -2, while in aof fake client's fd is -1 */
-#define REDIS_BUCKET_INIT_FD  -2
+/* Define bucket default transfer id as 0 */
+#define REDIS_BUCKET_INIT_ID  0
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object
@@ -435,7 +435,7 @@ typedef struct hashBucket{
     dictEntry * ptr_lock_key; /* point to key locked */
     void *    locking_nexists_key;    /* store the key string when key doesnot exists */
 
-    int     fd;     /* record the current transfer client fd, to avoid multi-transfer server started */
+    uint64_t     id;     /* record the current transfer client id, to avoid multi-transfer server started */
 } hashbucket;
 
 
@@ -1510,6 +1510,8 @@ void enableWatchdog(int period);
 void disableWatchdog(void);
 void watchdogScheduleSignal(int period);
 void redisLogHexDump(int level, char *descr, void *value, size_t len);
+
+int rdbSaveTransferStatus(rio *rdb, redisDb *db);
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

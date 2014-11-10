@@ -498,10 +498,22 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                        if the key is expired or be deleted, we should reset the bucket's locking status.
                        if the key doesnot exist, would not come to here.
                     */
+
+                    if(tdb->hk[key_hash_val].ptr_lock_key != NULL){
+                        redisLog(REDIS_WARNING, "ptr_lock_key: %s %s\n",(char *)tdb->hk[key_hash_val].ptr_lock_key->key,(char *)key);
+                    }
+
+                    /* locking keys */
                     if(tdb->hk[key_hash_val].ptr_lock_key != NULL &&
-                            strcmp(tdb->hk[key_hash_val].ptr_lock_key->key,key) == 0){
-                            tdb->hk[key_hash_val].ptr_lock_key = NULL;
-                        }
+                            tdb->hk[key_hash_val].ptr_lock_key == he){
+                        tdb->hk[key_hash_val].ptr_lock_key = NULL;
+                    }
+
+                    if(tdb->hk[key_hash_val].locking_nexists_key != NULL && 
+                            strcmp((char*)tdb->hk[key_hash_val].locking_nexists_key, (char*)he->key)==0 ){
+                        zfree(tdb->hk[key_hash_val].locking_nexists_key);
+                        tdb->hk[key_hash_val].locking_nexists_key = NULL;
+                    }
                     
 
 
@@ -562,6 +574,19 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
 
                     /* delete the node from the bucket */
                     tdb->hk[key_hash_val].keys--;
+
+                    /* check locking key */
+                    if(tdb->hk[key_hash_val].ptr_lock_key != NULL && 
+                            tdb->hk[key_hash_val].ptr_lock_key == he){
+                        tdb->hk[key_hash_val].ptr_lock_key = NULL;
+                    }
+
+                    /* check the locking key */
+                    if(tdb->hk[key_hash_val].locking_nexists_key != NULL &&
+                           strcmp((char*)tdb->hk[key_hash_val].locking_nexists_key, (char*)he->key)==0){
+                        zfree(tdb->hk[key_hash_val].locking_nexists_key);
+                        tdb->hk[key_hash_val].locking_nexists_key = NULL;
+                    }
 
 
                     if(he->hk_pre != NULL){

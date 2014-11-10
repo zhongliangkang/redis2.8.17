@@ -953,6 +953,31 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
     return 1;
 }
 
+/* Emit the commands needed to rebuild a bucket status.
+ * The function returns REDIS_ERR on error, REDIS_OK on success. */
+int rewriteBucketStatus(rio *r, long bid, long status) {
+    char setcmd[]="*5\r\n$4\r\nmget\r\n$14\r\n___transfer___\r\n$17\r\nrcsetbucketstatus\r\n";
+    if (rioWrite(r,setcmd,sizeof(setcmd)-1) == 0) goto werr;
+    if (rioWriteBulkLongLong(r,bid) == 0) goto werr;
+    if (rioWriteBulkLongLong(r,status) == 0) goto werr;
+
+    return REDIS_OK;
+werr:
+    return REDIS_ERR;
+}
+
+/* Emit the commands needed to rebuild a locking key.
+ * The function returns REDIS_ERR on error, REDIS_OK on success. */
+int rewriteLockingKey(rio *r, const char *s, size_t len){
+    char setcmd[]="*4\r\n$4\r\nmget\r\n$14\r\n___transfer___\r\n$9\r\nrclockkey\r\n";
+    if (rioWrite(r,setcmd,sizeof(setcmd)-1) == 0) goto werr;
+    if (rioWriteBulkString(r,s,len) == 0) goto werr;
+
+    return REDIS_OK;
+werr:
+    return REDIS_ERR;
+}
+
 /* Write either the key or the value of the currently selected item of a hash.
  * The 'hi' argument passes a valid Redis hash iterator.
  * The 'what' filed specifies if to write a key or a value and can be
@@ -1011,6 +1036,30 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
     return 1;
 }
 
+int aofSaveTransferStatus(rio *aof, redisDb *db){
+    redisAssert(db);
+    int idx=0;
+
+    for (idx = 0;idx <REDIS_HASH_BUCKETS; idx++){
+        // normal bucket skiped
+        if(db->hk[idx].status == REDIS_BUCKET_IN_USING) continue;
+
+        if(rewriteBucketStatus(aof,idx,db->hk[idx].status)!= REDIS_OK) goto werr;
+
+        if(db->hk[idx].ptr_lock_key){
+            sds lockingkey = dictGetKey(db->hk[idx].ptr_lock_key);
+            if(rewriteLockingKey(aof,lockingkey,sdslen(lockingkey))) goto werr;
+        }else if(db->hk[idx].locking_nexists_key){
+            if(rewriteLockingKey(aof,db->hk[idx].locking_nexists_key,
+                        strlen(db->hk[idx].locking_nexists_key))) goto werr;
+        }
+    }
+
+    return REDIS_OK;
+werr:
+    return REDIS_ERR;
+}
+
 /* Write a sequence of commands able to fully rebuild the dataset into
  * "filename". Used both by REWRITEAOF and BGREWRITEAOF.
  *
@@ -1042,17 +1091,21 @@ int rewriteAppendOnlyFile(char *filename) {
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = server.db+j;
+
+        /* SELECT the new DB */
+        if (rioWrite(&aof,selectcmd,sizeof(selectcmd)-1) == 0) goto werr;
+        if (rioWriteBulkLongLong(&aof,j) == 0) goto werr;
+
         dict *d = db->dict;
-        if (dictSize(d) == 0) continue;
+        if (dictSize(d) == 0) {  // no keys
+            aofSaveTransferStatus(&aof, db);
+            continue;
+        }
         di = dictGetSafeIterator(d);
         if (!di) {
             fclose(fp);
             return REDIS_ERR;
         }
-
-        /* SELECT the new DB */
-        if (rioWrite(&aof,selectcmd,sizeof(selectcmd)-1) == 0) goto werr;
-        if (rioWriteBulkLongLong(&aof,j) == 0) goto werr;
 
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
@@ -1097,6 +1150,8 @@ int rewriteAppendOnlyFile(char *filename) {
             }
         }
         dictReleaseIterator(di);
+
+        aofSaveTransferStatus(&aof,db);
     }
 
     /* Make sure data will not remain on the OS's output buffers */

@@ -659,6 +659,9 @@ void rcsetbucketstatusCommand(redisClient *c){
 
     if(rdb->hk[bid].status == REDIS_BUCKET_IN_USING ){ /* only in_using bucket can set? if needed. */
         rdb->hk[bid].status = status;
+        if(server.svr_in_transfer == 0){
+            server.svr_in_transfer = 1;
+        }
         addReplyLongLong(c,1); 
         return;
     }
@@ -676,14 +679,14 @@ int check_bucket_transfering(redisClient *c, int bid){
     if( bid<1 || bid >= REDIS_HASH_BUCKETS)
         return 0;
 
-    int trans_fd = rdb->hk[bid].fd;
+    int trans_id = rdb->hk[bid].id;
     listNode *ln;
     listIter li;
     redisClient *client;
     //printf("check_bucket_transfering: %d %d\n",bid,trans_fd);
 
     // current client is the transfer fd,return 0
-    if(c->fd == trans_fd){
+    if(c->id == trans_id){
         return 0;
     }
 
@@ -701,9 +704,10 @@ int check_bucket_transfering(redisClient *c, int bid){
     while( (ln = listNext(&li)) != NULL){
         client = listNodeValue(ln);
 
-        if(client->fd == trans_fd && 
+        if(client->id == trans_id && 
                 (client->rc_flag == REDIS_CLIENT_TRANS_OUT ||
                 client->rc_flag == REDIS_CLIENT_TRANS_IN)){
+             redisLog(REDIS_WARNING,"check_bucket_transfering return 1: %d %d %d",client->fd,trans_id,client->rc_flag);
             return 1;
         }
     }
@@ -768,11 +772,12 @@ void rctransbeginCommand(redisClient *c){
                 !check_bucket_transfering(c,start)){
             bucket_locking = 1;
             addReplyStatus(c,"transfering");
-            rdb->hk[start].fd = c->fd;
+            rdb->hk[start].id = c->id;
             server.dirty++;
             return;
         }
 
+        redisLog(REDIS_WARNING,"check_bucket_transfering in: %ld  %ld ,%d %d",start,end,trans_out_or_slave ,rdb->hk[start].status);
         // bucket is transfering
         addReplyErrorFormat(c,"seg: %ld is transfering.",idx);
         return;
@@ -788,11 +793,11 @@ void rctransbeginCommand(redisClient *c){
                 // noting. should never come to here.
             }
 
-            // record the fd to bucket, to avoid more than 1 transfer started. slave set it as init fd
+            // record the id to bucket, to avoid more than 1 transfer started. slave set it as init id
             if(c->rc_flag == REDIS_CLIENT_TRANS_SLAVE){
-                rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;
+                rdb->hk[idx].id = REDIS_BUCKET_INIT_ID;
             }else{
-                rdb->hk[idx].fd = c->fd;
+                rdb->hk[idx].id = c->id;
             }
         }
     }
@@ -887,7 +892,7 @@ void rctransendCommand(redisClient *c){
             // NOTE: only set bucket TRANSFER_OUT to TRANSFERED, other status do not transfer!!
             if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_OUT){
                 rdb->hk[idx].status = REDIS_BUCKET_TRANSFERED;
-                rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;
+                rdb->hk[idx].id = REDIS_BUCKET_INIT_ID;
             }
         }
         addReply(c,shared.ok);
@@ -934,7 +939,7 @@ void rctransendCommand(redisClient *c){
             // NOTE: only set bucket IN_USING to TRANSFERING, other status do not transfer!!
             if( rdb->hk[idx].status == REDIS_BUCKET_TRANSFER_IN){
                 rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
-                rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;
+                rdb->hk[idx].id = REDIS_BUCKET_INIT_ID;
             }
         }
         addReply(c,shared.ok);
@@ -985,7 +990,7 @@ void rcresetbucketsCommand(redisClient *c){
 
         for( idx = start; idx <= end; idx++){
             rdb->hk[idx].status = REDIS_BUCKET_IN_USING;
-            rdb->hk[idx].fd = REDIS_BUCKET_INIT_FD;    /* set again for safe */
+            rdb->hk[idx].id = REDIS_BUCKET_INIT_ID;    /* set again for safe */
         }
 
         // change server.svr_in_transfer = 0 if all bucket is in using.

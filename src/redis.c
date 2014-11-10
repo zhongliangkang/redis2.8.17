@@ -1560,7 +1560,7 @@ void initHashBucket(struct hashBucket * bkt){
         tbkt->list_head = NULL; /* init as NULL */
         tbkt->ptr_lock_key = NULL;
         tbkt->locking_nexists_key = NULL;
-        tbkt->fd = REDIS_BUCKET_INIT_FD;
+        tbkt->id = REDIS_BUCKET_INIT_ID;
 
         tbkt++;
     }

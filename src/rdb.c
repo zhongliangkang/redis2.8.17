@@ -373,9 +373,39 @@ robj *rdbGenericLoadStringObject(rio *rdb, int encode) {
     return createObject(REDIS_STRING,val);
 }
 
-robj *rdbGenericLoadBucketStatus(rio *rdb,int encode, redisDb *db){
+int getBucketStatus(char * str, long *p_bid, long *p_status){
+    long bid,status;
+    char *pos, *pb, *pv;
+
+    if((pos=strchr(str,':')) != NULL){
+        pb = str;
+        pv = pos+1;
+
+        int tpos = pos-str;
+
+        if(!string2l(pb,tpos,&bid) ||
+                !string2l(pv,strlen(str)-tpos-1,&status)){
+            return 1;
+        }
+
+        redisLog(REDIS_WARNING,"getBucketStatus: %s %s\n",pb,pv);
+        redisLog(REDIS_WARNING,"getBucketStatus: %ld %ld\n",bid,status);
+
+        *p_bid = bid;
+        *p_status = status;
+
+        return 0;
+    }
+
+    return 1;
+}
+
+// flag: 0 the process string is BUCKETID:STATUS,  
+// flag: 1 the process string is BUCKETID:LOCKINGKEY
+robj *rdbGenericLoadBucketStatus(rio *rdb,redisDb *db, int flag){
     uint32_t len; 
     sds val; 
+    long bid=-1,status=-1;
 
     len = rdbLoadLen(rdb,NULL);
 
@@ -386,18 +416,80 @@ robj *rdbGenericLoadBucketStatus(rio *rdb,int encode, redisDb *db){
         return NULL;
     }    
 
-    fprintf(stderr,"val:%s\n",val);
+    if(flag == 0){  // bucket status
+        if(getBucketStatus(val,&bid,&status)){
+            // fail
+            redisLog(REDIS_WARNING, "getBucketStatus failed: %s.",val);
+            return NULL;
+        }
 
+        if(bid < 0 || bid >= REDIS_HASH_BUCKETS || status < 0 ||
+                (status != REDIS_BUCKET_IN_USING && status != REDIS_BUCKET_TRANSFER_IN && 
+                 status != REDIS_BUCKET_TRANSFER_OUT && status != REDIS_BUCKET_TRANSFERED)){
+            redisLog(REDIS_WARNING, "failed: invalid bucketid: %ld, status: %ld.",bid, status);
+            return NULL;
+        }
+        redisLog(REDIS_WARNING,"get bid: %ld %ld\n",bid,status);
 
-    return createObject(REDIS_STRING,val);
+        // set the bucket flag
+        db->hk[bid].status = status;
+        if(server.svr_in_transfer == 0 && status != REDIS_BUCKET_IN_USING){
+            server.svr_in_transfer  = 1;
+        }
+
+        return createObject(REDIS_STRING,val);
+    }
+
+    // locking key
+    if(flag == 1){ // bucketid locking key
+        char *pos;
+        sds pk = sdsempty();;
+        if((pos=strchr(val,':')) != NULL){
+            int tpos = pos-val;
+            if(!string2l(val,tpos,&bid) || bid <0 || bid>= REDIS_HASH_BUCKETS){
+                redisLog(REDIS_WARNING, "parse lockingkey failed: %s.",val);
+                return NULL;
+            }
+
+            pk = sdscatprintf(pk,"%s",val+tpos+1);
+            dictEntry *o;
+            o = dictFind(db->dict,pk);
+
+            redisLog(REDIS_WARNING, "getBucketStatus locking key: %s.",pk);
+
+            // key found
+            if(o){
+                redisAssert(o->o_flag == REDIS_KEY_NORMAL);
+
+                o->o_flag = REDIS_KEY_TRANSFERING;
+                db->hk[bid].ptr_lock_key = o;
+            }else{
+                // key not found. add to locking_nexists_key
+                redisAssert(db->hk[bid].locking_nexists_key == NULL);
+                char *tp = zmalloc(sizeof(char) *strlen((char *)pk) + 1);
+                db->hk[bid].locking_nexists_key = memcpy(tp,pk,strlen((char *)pk));
+                // mark the tail as 0
+                tp[strlen((char *)pk)]=0;
+            }
+
+            sdsfree(pk);
+            return createObject(REDIS_STRING,val);
+
+        }
+        redisLog(REDIS_WARNING, "parse lockingkey failed: %s.",val);
+        return NULL;
+    }
+
+    // should never come to here
+    return NULL;
 }
 
 robj *rdbLoadStringObject(rio *rdb) {
     return rdbGenericLoadStringObject(rdb,0);
 }
 
-robj *rdbLoadBucketStatus(rio *rdb, redisDb *db){
-    return rdbGenericLoadBucketStatus(rdb,1,db);
+robj *rdbLoadBucketStatus(rio *rdb, redisDb *db, int flag){
+    return rdbGenericLoadBucketStatus(rdb,db,flag);
 }
 
 robj *rdbLoadEncodedStringObject(rio *rdb) {
@@ -668,7 +760,8 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val,
 int rdbSaveTransferStatus(rio *rdb, redisDb *db){
     int idx=0;
     char mstr[100];
-    uint32_t len;
+    char *keystr;
+    uint32_t len,keylen;
 
     for (idx=0; idx< REDIS_HASH_BUCKETS; idx++){
         /* we only record transfering bucket status. */
@@ -676,13 +769,42 @@ int rdbSaveTransferStatus(rio *rdb, redisDb *db){
             // record save type
             if (rdbSaveType(rdb,REDIS_RDB_OPCODE_TRANSINFO) == -1) goto werr;
             len = snprintf(mstr,100,"%d:%d", idx, db->hk[idx].status);
-
-            printf("save len:%ul\n",len);
+            //printf("save len:%u\n",len);
             if (rdbSaveManageString(rdb, (unsigned char *)mstr, len) == -1) goto werr;
+
+            // save locking key
+            if(db->hk[idx].ptr_lock_key != NULL ){
+                if (rdbSaveType(rdb,REDIS_RDB_OPCODE_LOCKINGKEY) == -1) goto werr;
+                sds lockingkey = dictGetKey(db->hk[idx].ptr_lock_key);
+
+                keylen = sdslen(lockingkey);
+                keystr = zmalloc(len+100); // enough space
+
+                len = snprintf(keystr,100,"%d:", idx);
+
+                memcpy(keystr+len,lockingkey,keylen);
+
+                //printf("save key: %u, %s\n",len, keystr);
+                if (rdbSaveManageString(rdb, (unsigned char *)keystr, keylen + len) == -1) {
+                    zfree(keystr);
+                    goto werr;
+                }else{
+                    zfree(keystr);
+                }
+
+            }else if(db->hk[idx].locking_nexists_key != NULL){
+                if (rdbSaveType(rdb,REDIS_RDB_OPCODE_LOCKINGKEY) == -1) goto werr;
+                if (rdbSaveManageString(rdb, 
+                            (unsigned char *)db->hk[idx].locking_nexists_key, 
+                            strlen(db->hk[idx].locking_nexists_key)) == -1) 
+                    goto werr;
+            }
         }
     }
+    return 0;
 
 werr:
+    redisLog(REDIS_WARNING, "Failed rdbSaveTransferStatus.");
     return 1;
 }
 
@@ -723,7 +845,7 @@ int rdbSave(char *filename) {
         if (dictSize(d) == 0) {
             /* record the buckets' status and locking keys.this should not fail. */
             //if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_TRANSINFO) == -1) goto werr;
-            rdbSaveTransferStatus(&rdb, db);
+            if(rdbSaveTransferStatus(&rdb, db)) goto werr;
             continue;
         }
         di = dictGetSafeIterator(d);
@@ -747,7 +869,7 @@ int rdbSave(char *filename) {
 
         /* record the buckets' status and locking keys.this should not fail. */
         //if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_TRANSINFO) == -1) goto werr;
-        rdbSaveTransferStatus(&rdb, db);
+        if(rdbSaveTransferStatus(&rdb, db)) goto werr;
     }
     di = NULL; /* So that we don't release it again on error. */
 
@@ -1201,9 +1323,18 @@ int rdbLoad(char *filename) {
             if ((expiretime = rdbLoadMillisecondTime(&rdb)) == -1) goto eoferr;
             /* We read the time so we need to read the object type again. */
             if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
-        }else if(type == REDIS_RDB_OPCODE_TRANSINFO){
-            //if (rdbLoadBucketStatus(&rdb,db)) goto eoferr;
-            tt = rdbLoadBucketStatus(&rdb, db);
+        }
+        
+        if(type == REDIS_RDB_OPCODE_TRANSINFO){
+            tt = rdbLoadBucketStatus(&rdb, db,0);
+            if(!tt) goto eoferr;
+            freeStringObject(tt);
+            continue;
+        }
+
+        if(type == REDIS_RDB_OPCODE_LOCKINGKEY){
+            tt = rdbLoadBucketStatus(&rdb, db,1);
+            if(!tt) goto eoferr;
             freeStringObject(tt);
             continue;
         }
