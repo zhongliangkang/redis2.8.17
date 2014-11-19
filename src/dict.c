@@ -499,9 +499,11 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                        if the key doesnot exist, would not come to here.
                     */
 
+                    /* //test
                     if(tdb->hk[key_hash_val].ptr_lock_key != NULL){
                         redisLog(REDIS_WARNING, "ptr_lock_key: %s %s\n",(char *)tdb->hk[key_hash_val].ptr_lock_key->key,(char *)key);
                     }
+                    */
 
                     /* locking keys */
                     if(tdb->hk[key_hash_val].ptr_lock_key != NULL &&

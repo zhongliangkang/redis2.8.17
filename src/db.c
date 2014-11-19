@@ -970,7 +970,7 @@ void rcresetbucketsCommand(redisClient *c){
         return;
     }
 
-    if(c->rc_flag != REDIS_CLIENT_TRANS_OUT){
+    if(c->rc_flag != REDIS_CLIENT_TRANS_OUT &&  c->rc_flag != REDIS_CLIENT_TRANS_SLAVE){
         addReplyError(c,"Client should in trans_out status");
         return;
     }
