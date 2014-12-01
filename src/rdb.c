@@ -443,6 +443,7 @@ robj *rdbGenericLoadBucketStatus(rio *rdb,redisDb *db, int flag){
     // locking key
     if(flag == 1){ // bucketid locking key
         char *pos;
+        redisLog(REDIS_WARNING, "val: %s.",val);
         sds pk = sdsempty();;
         if((pos=strchr(val,':')) != NULL){
             int tpos = pos-val;
@@ -476,7 +477,7 @@ robj *rdbGenericLoadBucketStatus(rio *rdb,redisDb *db, int flag){
             return createObject(REDIS_STRING,val);
 
         }
-        redisLog(REDIS_WARNING, "parse lockingkey failed: %s.",val);
+        redisLog(REDIS_WARNING, "parse lockingkey failed:2 %s.",val);
         return NULL;
     }
 
@@ -778,9 +779,11 @@ int rdbSaveTransferStatus(rio *rdb, redisDb *db){
                 sds lockingkey = dictGetKey(db->hk[idx].ptr_lock_key);
 
                 keylen = sdslen(lockingkey);
-                keystr = zmalloc(len+100); // enough space
+                keystr = zmalloc(keylen + 100); // enough space
+
 
                 len = snprintf(keystr,100,"%d:", idx);
+                redisLog(REDIS_WARNING, "bbbbug:%s %u",lockingkey, len);
 
                 memcpy(keystr+len,lockingkey,keylen);
 
@@ -794,10 +797,17 @@ int rdbSaveTransferStatus(rio *rdb, redisDb *db){
 
             }else if(db->hk[idx].locking_nexists_key != NULL){
                 if (rdbSaveType(rdb,REDIS_RDB_OPCODE_LOCKINGKEY) == -1) goto werr;
-                if (rdbSaveManageString(rdb, 
-                            (unsigned char *)db->hk[idx].locking_nexists_key, 
-                            strlen(db->hk[idx].locking_nexists_key)) == -1) 
-                    goto werr;
+                char str[100] ;
+                len = snprintf(str,100,"%d:", idx);
+
+                uint32_t slen = len+strlen(db->hk[idx].locking_nexists_key);
+                int tn, tw = 0;
+                if((tn = rdbSaveLen(rdb,slen)) == -1) goto werr;
+                tw += tn;
+                if(rdbWriteRaw(rdb,str,len) == -1) goto werr;
+                if(slen > len){
+                    if(rdbWriteRaw(rdb,db->hk[idx].locking_nexists_key,slen - len) == -1) goto werr;
+                }
             }
         }
     }
