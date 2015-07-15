@@ -61,6 +61,7 @@ static int checkStringLength(redisClient *c, long long size) {
 #define REDIS_SET_NO_FLAGS 0
 #define REDIS_SET_NX (1<<0)     /* Set if key not exists. */
 #define REDIS_SET_XX (1<<1)     /* Set if key exists. */
+#define REDIS_SET_NXEX (1<<2)   /* Set and expire if key not existed. */
 
 void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
@@ -75,9 +76,10 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
         if (unit == UNIT_SECONDS) milliseconds *= 1000;
     }
 
-    if ((flags & REDIS_SET_NX && lookupKeyWrite(c->db,key) != NULL) ||
-        (flags & REDIS_SET_XX && lookupKeyWrite(c->db,key) == NULL))
-    {
+    robj *o = lookupKeyWrite(c->db,key);
+    if ((flags & REDIS_SET_NX && o != NULL) ||
+        (flags & REDIS_SET_XX && o == NULL) ||
+          (flags & REDIS_SET_NXEX && o != NULL)) {
         addReply(c, abort_reply ? abort_reply : shared.nullbulk);
         return;
     }
@@ -140,6 +142,11 @@ void setexCommand(redisClient *c) {
 void psetexCommand(redisClient *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
+}
+
+void setnxexCommand(redisClient *c) {
+    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    setGenericCommand(c,REDIS_SET_NXEX,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,shared.cone,shared.czero);
 }
 
 int getGenericCommand(redisClient *c) {
@@ -348,6 +355,53 @@ void incrDecrCommand(redisClient *c, long long incr) {
     addReply(c,shared.colon);
     addReply(c,new);
     addReply(c,shared.crlf);
+}
+
+void incrdecrexCommand(redisClient *c, long long incr, long long ttl) {
+    long long value, oldvalue, rrvalue;
+    robj *o, *new;
+    int ret;
+
+    o = lookupKeyWrite(c->db,c->argv[1]);
+    if (o != NULL && checkType(c,o,REDIS_STRING)) return;
+     
+    if (o == NULL) {
+        value = 0;
+    } else { 
+        if (getLongLongFromObjectOrReply(c,o,&value,NULL) != REDIS_OK) return;
+    }
+
+    oldvalue = value;
+    if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN-oldvalue)) ||
+            (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX-oldvalue))) {
+        addReplyError(c,"increment or decrement would overflow");
+        return;
+    }
+
+    value += incr;
+    new = createStringObjectFromLongLong(value);
+    if (o) {
+	    if (getExpire(c->db,c->argv[1])==-1) {
+		    setExpire(c->db,c->argv[1],ttl);
+	    }
+	    dbOverwrite(c->db,c->argv[1],new);
+    } else {
+	    dbAdd(c->db,c->argv[1],new);
+	    setExpire(c->db,c->argv[1],ttl); 
+    }
+    signalModifiedKey(c->db,c->argv[1]);
+    notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
+    server.dirty++;
+    addReply(c,shared.colon);
+    addReply(c,new);
+    addReply(c,shared.crlf);
+}
+
+void increxCommand(redisClient *c) {
+    long long ttl;
+
+    if (getLongLongFromObjectOrReply(c,c->argv[2],&ttl,NULL) != REDIS_OK) return;
+    incrdecrexCommand(c, 1, ttl*1000+mstime());
 }
 
 void incrCommand(redisClient *c) {

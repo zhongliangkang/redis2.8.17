@@ -28,6 +28,7 @@ set ::all_tests {
     unit/other
     unit/multi
     unit/quit
+    unit/bucket
     unit/aofrw
     integration/replication
     integration/replication-2
@@ -486,7 +487,7 @@ proc is_a_slow_computer {} {
 
 if {$::client} {
     if {[catch { test_client_main $::test_server_port } err]} {
-        set estr "Executing test client: $err.\n$::errorInfo"
+        set estr "Executing test clientx: $err.\n$::errorInfo"
         if {[catch {send_data_packet $::test_server_fd exception $estr}]} {
             puts $estr
         }
