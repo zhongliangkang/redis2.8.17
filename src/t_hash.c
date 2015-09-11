@@ -743,6 +743,56 @@ void genericHgetallCommand(redisClient *c, int flags) {
     redisAssert(count == length);
 }
 
+// support multi hash hmgetall operation
+void genericHmgetallCommand(redisClient *c, int flags) {
+    robj *o;
+    hashTypeIterator *hi;
+    int multiplier = 0;
+    int length, count = 0;
+    int length_all = 0,j;
+    if (flags & REDIS_HASH_KEY) multiplier++;
+    if (flags & REDIS_HASH_VALUE) multiplier++;
+
+    for(j=1;j<c->argc;j++){
+
+        if ((o = lookupKeyRead(c->db,c->argv[j])) == NULL
+                || checkType(c,o,REDIS_HASH)) continue;
+
+        hi = hashTypeInitIterator(o);
+        length = hashTypeLength(o) * multiplier;
+
+        length_all +=length;
+
+        hashTypeReleaseIterator(hi);
+    }
+        
+    // no key found
+    if(length_all == 0){
+       addReply(c,shared.emptymultibulk);
+       return;
+    }
+    addReplyMultiBulkLen(c, length_all);
+
+    for(j=1;j<c->argc;j++){
+        if ((o = lookupKeyRead(c->db,c->argv[j])) == NULL
+                || checkType(c,o,REDIS_HASH)) continue;
+
+        hi = hashTypeInitIterator(o);
+        while (hashTypeNext(hi) != REDIS_ERR) {
+            if (flags & REDIS_HASH_KEY) {
+                addHashIteratorCursorToReply(c, hi, REDIS_HASH_KEY);
+                count++;
+            }
+            if (flags & REDIS_HASH_VALUE) {
+                addHashIteratorCursorToReply(c, hi, REDIS_HASH_VALUE);
+                count++;
+            }
+        }
+        hashTypeReleaseIterator(hi);
+    }
+    redisAssert(count == length_all);
+}
+
 void hkeysCommand(redisClient *c) {
     genericHgetallCommand(c,REDIS_HASH_KEY);
 }
@@ -753,6 +803,10 @@ void hvalsCommand(redisClient *c) {
 
 void hgetallCommand(redisClient *c) {
     genericHgetallCommand(c,REDIS_HASH_KEY|REDIS_HASH_VALUE);
+}
+
+void hmgetallCommand(redisClient *c) {
+    genericHmgetallCommand(c,REDIS_HASH_KEY|REDIS_HASH_VALUE);
 }
 
 void hexistsCommand(redisClient *c) {
