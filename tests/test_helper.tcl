@@ -11,6 +11,8 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
+#unit/bucket   test case is for tencent-version functions
+#unit/tencent  test case is for tencent-version functions
 set ::all_tests {
     unit/printver
     unit/auth
@@ -29,6 +31,7 @@ set ::all_tests {
     unit/multi
     unit/quit
     unit/bucket
+    unit/tencent
     unit/aofrw
     integration/replication
     integration/replication-2
