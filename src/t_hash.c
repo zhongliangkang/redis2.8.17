@@ -756,7 +756,7 @@ void genericHmgetallCommand(redisClient *c, int flags) {
     for(j=1;j<c->argc;j++){
 
         if ((o = lookupKeyRead(c->db,c->argv[j])) == NULL
-                || checkType(c,o,REDIS_HASH)) continue;
+                || o->type!=REDIS_HASH ) continue;
 
         hi = hashTypeInitIterator(o);
         length = hashTypeLength(o) * multiplier;
@@ -775,7 +775,7 @@ void genericHmgetallCommand(redisClient *c, int flags) {
 
     for(j=1;j<c->argc;j++){
         if ((o = lookupKeyRead(c->db,c->argv[j])) == NULL
-                || checkType(c,o,REDIS_HASH)) continue;
+                || o->type != REDIS_HASH) continue;
 
         hi = hashTypeInitIterator(o);
         while (hashTypeNext(hi) != REDIS_ERR) {

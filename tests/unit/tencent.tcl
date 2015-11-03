@@ -79,4 +79,18 @@ start_server {tags {"increx"}} {
     } [lsort [array get smallhash]]
 
 
+    test {HMGETALL - test hmgetall wrong type } {
+        set value "value12345666"
+        set key   "testkey"
+        r set tstring $value
+        lsort [r hmgetall smallhash1 $key smallhash2 smallhash3]
+    } [lsort [array get smallhash]]
+
+    test {HMGETALL - hmgetall with wrong type, later command return should ok} {
+        set value "value12345666"
+        set key   "testkey"
+        r set $key $value
+        lsort [r hmgetall smallhash1 $key smallhash2 smallhash3]
+        r get $key
+    } {value12345666}
 }
