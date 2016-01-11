@@ -122,11 +122,13 @@ REDIS_CHECK_DUMP_NAME=redis-check-dump
 REDIS_CHECK_DUMP_OBJ=redis-check-dump.o lzf_c.o lzf_d.o crc64.o
 REDIS_CHECK_AOF_NAME=redis-check-aof
 REDIS_CHECK_AOF_OBJ=redis-check-aof.o
+REDIS_AOF_KEYS_NAME=redis-aof-keys
+REDIS_AOF_KEYS_OBJ=adlist.o ae.o anet.o dict.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof-keys.o pubsub.o multi.o debug.o sort.o intset.o syncio.o migrate.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o hyperloglog.o latency.o sparkline.o redis-aof-keys.o
 
 REDIS_TEST_NAME=redis-test
 REDIS_TEST_OBJ=ae.o anet.o redis-test.o sds.o adlist.o zmalloc.o redis-test.o
 
-all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_DUMP_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_TEST_NAME)
+all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_DUMP_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_TEST_NAME) $(REDIS_AOF_KEYS_NAME)
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
@@ -196,6 +198,10 @@ $(REDIS_CHECK_DUMP_NAME): $(REDIS_CHECK_DUMP_OBJ)
 # redis-check-aof
 $(REDIS_CHECK_AOF_NAME): $(REDIS_CHECK_AOF_OBJ)
 	$(REDIS_LD) -o $@ $^ $(FINAL_LIBS)
+
+# redis-aof-keys
+$(REDIS_AOF_KEYS_NAME): $(REDIS_AOF_KEYS_OBJ)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(FINAL_LIBS)
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
