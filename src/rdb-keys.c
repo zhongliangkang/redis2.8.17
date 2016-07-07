@@ -1378,15 +1378,16 @@ int rdbLoad(char *filename) {
             continue;
         }
         /* Add the new object in the hash table */
-        dbAdd(db,key,val);
+        //dbAdd(db,key,val);
 
         /* Set the expire time if needed */
-        if (expiretime != -1) setExpire(db,key,expiretime);
+        //if (expiretime != -1) setExpire(db,key,expiretime);
 
 	/* print the key info */
 	fprintf(stdout,"%s %lld\n",(char *)key->ptr,expiretime);
 
         decrRefCount(key);
+        decrRefCount(val);
     }
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5 && server.rdb_checksum) {
