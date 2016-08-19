@@ -26,3 +26,9 @@ deps/lua/src/liblua.a
 .prerequisites
 *.dSYM
 tags
+get_keyfile_hashval
+get_redis_hashval
+redis-aof-keys
+pkg.tar.gz
+redis_checksum
+redis-rdb-keys
